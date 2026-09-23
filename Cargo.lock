@@ -1575,8 +1575,15 @@ dependencies = [
 name = "wasm-component-middleware-wasi-http"
 version = "0.0.0"
 dependencies = [
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "rustls",
+ "tokio",
  "wasm-component-middleware",
  "wasm-component-middleware-wasi",
+ "wasmtime",
  "wasmtime-wasi-http",
 ]
 

@@ -8,9 +8,18 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+http.workspace = true
+hyper.workspace = true
+rustls.workspace = true
 wasm-component-middleware = { path = "../wasm-component-middleware", version = "0.0.0" }
 wasm-component-middleware-wasi = { path = "../wasm-component-middleware-wasi", version = "0.0.0" }
+wasmtime.workspace = true
 wasmtime-wasi-http.workspace = true
+
+[dev-dependencies]
+bytes = "1"
+http-body-util = "0.1"
+tokio.workspace = true
 
 [lints]
 workspace = true

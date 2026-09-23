@@ -75,6 +75,7 @@ mod tests {
             id: 1,
             direction,
             interface,
+            version: None,
             function,
             handles: &[],
             args: &(),
@@ -107,6 +108,15 @@ mod tests {
                 )
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn allows_every_version_of_an_interface() {
+        let layer = Allowlist::new().allow_interface("wasi:clocks/wall-clock");
+        let mut call = call(Direction::Import, Some("wasi:clocks/wall-clock"), "now");
+        call.version = Some("0.2.12");
+
+        assert!(layer.before(&mut (), &call).is_ok());
     }
 
     #[test]

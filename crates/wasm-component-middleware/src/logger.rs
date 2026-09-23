@@ -97,9 +97,12 @@ where
 
         let args = format!("{:?}", call.args);
         let args = if args == "()" { "" } else { &args };
-        let interface = call
-            .interface
-            .map_or(String::new(), |interface| format!("{interface}."));
+        let interface = call.interface.map_or(String::new(), |interface| {
+            call.version.map_or_else(
+                || format!("{interface}."),
+                |version| format!("{interface}@{version}."),
+            )
+        });
         let _ = writeln!(
             self.lock_writer(),
             "{}→ #{} {} {interface}{}({args})",
@@ -165,6 +168,7 @@ mod tests {
             id: chain.next_id(),
             direction: Direction::Export,
             interface: None,
+            version: None,
             function: "greet",
             handles: &[],
             args: &"Hello",
@@ -176,6 +180,7 @@ mod tests {
                     id: chain.next_id(),
                     direction: Direction::Import,
                     interface: Some("example:hello/host"),
+                    version: Some("1.0.0"),
                     function: "user-name",
                     handles: &[],
                     args: &(),
@@ -190,7 +195,7 @@ mod tests {
             String::from_utf8(bytes).unwrap(),
             concat!(
                 "→ #1 export greet(\"Hello\")\n",
-                "  → #2 import example:hello/host.user-name()\n",
+                "  → #2 import example:hello/host@1.0.0.user-name()\n",
                 "  ← #2 returned\n",
                 "← #1 returned\n",
             )
@@ -212,6 +217,7 @@ mod tests {
             id: chain.next_id(),
             direction: Direction::Import,
             interface: None,
+            version: None,
             function: "first",
             handles: &[],
             args: &(),
@@ -220,6 +226,7 @@ mod tests {
             id: chain.next_id(),
             direction: Direction::Import,
             interface: None,
+            version: None,
             function: "second",
             handles: &[],
             args: &(),
@@ -246,6 +253,7 @@ mod tests {
             id: chain.next_id(),
             direction: Direction::Import,
             interface: None,
+            version: None,
             function: "third",
             handles: &[],
             args: &(),
@@ -285,6 +293,7 @@ mod tests {
             id: chain.next_id(),
             direction: Direction::Export,
             interface: None,
+            version: None,
             function: "greet",
             handles: &[],
             args: &"Hello",

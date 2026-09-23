@@ -217,6 +217,7 @@ mod tests {
             id,
             direction: Direction::Import,
             interface: Some("example:test/host"),
+            version: None,
             function: "work",
             handles: &[],
             args: &(),

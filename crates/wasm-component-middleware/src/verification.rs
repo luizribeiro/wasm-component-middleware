@@ -68,7 +68,8 @@ pub fn verify_routing<'a>(
             continue;
         }
         match import.ty {
-            ComponentItem::ComponentInstance(_) if routed.contains(name) => {}
+            ComponentItem::ComponentInstance(_) if routed.contains(unversioned_interface(name)) => {
+            }
             ComponentItem::ComponentInstance(instance) => {
                 functions.extend(instance.exports(engine).filter_map(|(function, export)| {
                     match export.ty {
@@ -91,4 +92,9 @@ pub fn verify_routing<'a>(
     } else {
         Err(Unrouted { functions })
     }
+}
+
+fn unversioned_interface(name: &str) -> &str {
+    name.rsplit_once('@')
+        .map_or(name, |(interface, _)| interface)
 }

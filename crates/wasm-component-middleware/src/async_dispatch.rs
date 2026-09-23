@@ -142,6 +142,7 @@ mod tests {
             id: 1,
             direction: Direction::Import,
             interface: None,
+            version: None,
             function: "work",
             handles: &[],
             args: &(),

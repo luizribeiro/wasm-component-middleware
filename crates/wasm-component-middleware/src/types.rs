@@ -26,8 +26,10 @@ pub struct Call<'a> {
     pub id: u64,
     /// Whether the call enters or leaves the component.
     pub direction: Direction,
-    /// The canonical WIT interface name, or `None` for a root export.
+    /// The unversioned WIT interface name, or `None` for a root export.
     pub interface: Option<&'a str>,
+    /// The WIT interface version when the call belongs to a versioned interface.
+    pub version: Option<&'a str>,
     /// The WIT function name.
     pub function: &'a str,
     /// Resource representations consumed by the call.

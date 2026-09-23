@@ -34,6 +34,74 @@
           ];
           targets = [ "wasm32-wasip2" ];
         };
+        cargoFiles = "(^|/)(Cargo\\.(toml|lock)|.*\\.rs)$";
+        cargoHook =
+          {
+            name,
+            text,
+            runtimeInputs ? [ ],
+            files ? cargoFiles,
+          }:
+          {
+            enable = true;
+            entry = "${
+              pkgs.writeShellApplication {
+                inherit name text;
+                runtimeInputs = [ toolchain ] ++ runtimeInputs;
+              }
+            }/bin/${name}";
+            inherit files;
+            pass_filenames = false;
+          };
+        cargoHooks = {
+          rustfmt = {
+            enable = true;
+            packageOverrides = {
+              cargo = toolchain;
+              rustfmt = toolchain;
+            };
+            settings.check = true;
+          };
+          clippy = {
+            enable = true;
+            packageOverrides = {
+              cargo = toolchain;
+              clippy = toolchain;
+            };
+            settings = {
+              denyWarnings = true;
+              extraArgs = "--workspace --all-targets --all-features --locked";
+              offline = false;
+            };
+          };
+          cargo-nextest = cargoHook {
+            name = "cargo-nextest-hook";
+            runtimeInputs = [ pkgs.cargo-nextest ];
+            text = "cargo nextest run --workspace --all-features --locked --no-tests pass";
+          };
+          cargo-deny = cargoHook {
+            name = "cargo-deny-hook";
+            runtimeInputs = [ pkgs.cargo-deny ];
+            files = "(^|/)(Cargo\\.(toml|lock)|deny\\.toml)$";
+            text = "cargo deny check bans licenses sources";
+          };
+          cargo-package = cargoHook {
+            name = "cargo-package-hook";
+            text = ''
+              cargo package -p wasm-component-middleware -p wasm-component-middleware-wasi -p wasm-component-middleware-wasi-http --locked --allow-dirty
+            '';
+          };
+          doctests = cargoHook {
+            name = "doctests-hook";
+            text = "cargo test --doc --workspace --all-features --locked";
+          };
+          docs = cargoHook {
+            name = "docs-hook";
+            text = ''
+              RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+            '';
+          };
+        };
         offlineHooks = {
           nixfmt.enable = true;
           deadnix.enable = true;
@@ -47,7 +115,7 @@
           check-yaml.enable = true;
           check-toml.enable = true;
         };
-        hookDefinitions = offlineHooks;
+        hookDefinitions = offlineHooks // cargoHooks;
         gitHooks = git-hooks.lib.${system}.run {
           src = ./.;
           hooks = hookDefinitions;

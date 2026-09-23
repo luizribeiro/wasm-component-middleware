@@ -1,0 +1,15 @@
+[package]
+name = "wasm-component-middleware-wasi"
+description = "WASI middleware for WebAssembly component calls"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+wasm-component-middleware = { path = "../wasm-component-middleware", version = "0.0.0" }
+wasmtime-wasi.workspace = true
+
+[lints]
+workspace = true

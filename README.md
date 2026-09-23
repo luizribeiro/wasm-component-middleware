@@ -4,8 +4,6 @@
 layers around WebAssembly component calls. A single chain can observe or deny
 the host's imports and the component's exports while preserving their nesting.
 
-This project is under construction.
-
 The [`trace` example](crates/wasm-component-middleware/examples/trace.rs) builds
 a chain with the included logger:
 
@@ -54,6 +52,13 @@ verify_routing(
 If middleware refuses an imported function whose WIT result has no error case,
 Wasmtime reports the refusal to the guest as a trap.
 
+Layers run outside-in before a call and inside-out afterward. They can share
+state across stores through `Arc`, or keep invocation-local state in
+`InvocationContext`. The core crate includes `Logger`, `Allowlist`, and
+`Budget`; WASI adds `OpenFiles`. Implement `Layer<State>` for application
+policy that needs typed arguments, resource handles, returned handles,
+failures, or cancellation.
+
 Run it from the repository root:
 
 ```console
@@ -79,9 +84,19 @@ use wasm_component_middleware_wasi::p2::add_to_linker_sync;
 add_to_linker_sync(&mut linker)?;
 ```
 
-The middleware linker routes `wasi:cli`, `wasi:clocks`, `wasi:filesystem`,
-and `wasi:random` on both previews, plus `wasi:io` and `wasi:sockets` on
-Preview 2.
+The middleware linker routes every interface linked by the matching Wasmtime
+49 function. Async Preview 2 uses
+`wasm_component_middleware_wasi::p2::add_to_linker_async` in the same way.
+After registering WASI and application imports, use the WASI-aware strict
+check; it has no unchecked prefixes:
+
+```rust
+wasm_component_middleware_wasi::verify_routing(
+    &engine,
+    &component,
+    [HELLO_HOST],
+)?;
+```
 
 The [`wasi-p2` example](crates/wasm-component-middleware-wasi/examples/wasi-p2.rs)
 runs a Rust guest that reads an environment variable and the wall clock before
@@ -107,19 +122,31 @@ add_to_linker(&mut linker)?;
 ```
 
 Rust Preview 3 components still import Preview 2 through the standard library,
-so link `wasmtime_wasi::p2::add_to_linker_async` as well. The
+so link `wasm_component_middleware_wasi::p2::add_to_linker_async` as well. The
 [`wasi-p3` example](crates/wasm-component-middleware-wasi/examples/wasi-p3.rs)
 shows both linker calls and the concurrent export invocation. A refusal of
 filesystem `read-via-stream`, `write-via-stream`, `append-via-stream`, or
 `read-directory` traps because those Preview 3 calls have no top-level error
 result.
 
+To run a command component as a traced program, preopening the current
+directory read-only, use:
+
+```console
+$ cargo run --example run -- path/to/component.wasm [args...]
+```
+
+Add `--inherit-env` before the component path when the guest should receive the
+host environment. The runner accepts Preview 2 and Preview 3
+`wasi:cli/command` components and writes the guest's normal output unchanged
+while the WASI trace goes to standard error.
+
 ## Streams
 
-Preview 3 moves file bytes through Component Model streams rather than host
-calls. The default `p3::add_to_linker` gates the call that opens each stream but
-leaves its bytes on Wasmtime's direct path. This also preserves Wasmtime's
-`try_into` short circuit for host-to-host streams.
+Preview 3 moves filesystem, socket, and stdio bytes through Component Model
+streams rather than host calls. The default `p3::add_to_linker` gates the call
+that opens each stream but leaves its bytes on Wasmtime's direct path. This also
+preserves Wasmtime's `try_into` short circuit for host-to-host streams.
 
 Use the opt-in relay when middleware must inspect or restrict every chunk:
 
@@ -135,12 +162,15 @@ The default queue bound is 64 KiB. A different nonzero bound can be selected
 with a const generic, for example `StreamRelay::<8192>::new()`. Relayed chunks
 appear as `[stream-read]read-via-stream`,
 `[stream-write]write-via-stream`, or
-`[stream-write]append-via-stream` calls. They reuse the opening call's id and
-descriptor handle; `args["bytes"]` exposes the complete chunk because relay
+`[stream-write]append-via-stream` calls. Stdio uses the same stream call names
+under its `wasi:cli/stdin`, `stdout`, or `stderr` interface, and TCP uses
+socket-specific names. Chunks reuse the opening call's id and handles;
+`args["bytes"]` exposes the complete chunk because relay
 data has already been copied. Ordinary gate argument snapshots retain the
 64-byte cap. Refusing a chunk leaves it unacknowledged, drains all
-previously approved chunks, and resolves the companion future as
-`error-code::access`, so the guest sees a recoverable filesystem error.
+previously approved chunks. The guest sees the interface's recoverable denial:
+filesystem returns `error-code::access`, stdio returns an I/O error, and TCP
+returns `error-code::access-denied`.
 The [`byte-budget` example](crates/wasm-component-middleware-wasi/examples/byte-budget.rs)
 uses this path to share a 100 KiB read allowance across stores.
 
@@ -264,9 +294,9 @@ and HTTP-only entry points as `wasmtime-wasi-http`; Preview 3 exposes
 `wasi:http/outgoing-handler`, and `wasi:http/client` then reaches middleware.
 Preview 2 bodies are visible through `wasi:io/streams` when the HTTP-only
 linker is combined with `wasm-component-middleware-wasi`'s synchronous gates.
-The convenience `p2::add_to_linker_async` currently links Wasmtime's proxy
-interfaces directly, including ungated streams. Preview 3 body streams
-currently pass through without a byte relay.
+The convenience `p2::add_to_linker_async` routes the Preview 2 proxy interfaces
+through the same chain. Preview 3 body streams currently pass through without
+a byte relay.
 
 Per-function gates do not see a complete request while it is being assembled.
 Install `WasiHttpHooks` beside `WasiHttpCtx` to route the final request through
@@ -346,3 +376,33 @@ For an imported function whose WIT result has no error case, a `Denied` error
 becomes a trap and the trapped store cannot be entered again. If refusal is an
 expected guest-visible outcome, model it in WIT as a `result` and map the
 denial into its error variant instead of propagating a Wasmtime error.
+
+## Examples
+
+- [`trace`](crates/wasm-component-middleware/examples/trace.rs) logs a nested export and its host imports.
+- [`deny`](crates/wasm-component-middleware/examples/deny.rs) combines logging with a function allowlist.
+- [`run`](crates/wasm-component-middleware-wasi/examples/run.rs) runs and traces any Preview 2 or Preview 3 WASI command.
+- [`wasi-p2`](crates/wasm-component-middleware-wasi/examples/wasi-p2.rs) traces synchronous Preview 2 environment, clock, and output calls.
+- [`wasi-p3`](crates/wasm-component-middleware-wasi/examples/wasi-p3.rs) traces concurrent Preview 3 calls and Rust's Preview 2 imports.
+- [`random`](crates/wasm-component-middleware-wasi/examples/random.rs) replaces and refuses random-number calls.
+- [`sandbox`](crates/wasm-component-middleware-wasi/examples/sandbox.rs) applies descriptor-aware path policy and an open-file limit.
+- [`byte-budget`](crates/wasm-component-middleware-wasi/examples/byte-budget.rs) enforces a shared allowance over relayed Preview 3 stream chunks.
+- [`net-allowlist`](crates/wasm-component-middleware-wasi/examples/net-allowlist.rs) applies one destination policy to Preview 2 and Preview 3 sockets.
+- [`http-allowlist`](crates/wasm-component-middleware-wasi-http/examples/http-allowlist.rs) checks complete outgoing HTTP requests at the send hook.
+
+## Composition and limitations
+
+Splicer and similar composition-time tools place middleware components into the
+component graph. This library instead runs middleware in the Wasmtime host. It
+can inspect host state and the WASI edges implemented by the host, without
+requiring a middleware component to be distributed with each guest. The two
+approaches can be used together.
+
+Application bindings must enable Wasmtime's `trappable` imports for a layer to
+refuse calls. WASI gates are tied to the exact WIT and generated traits in one
+Wasmtime release, so this workspace provides version-specific gates and pins
+Wasmtime 49. Preview 3 byte relaying is opt-in because it copies data through a
+bounded host queue and can reduce throughput. Without relaying, middleware sees
+the calls that create streams but not each byte chunk. Preview 3 accepted TCP
+sockets are also produced inside Wasmtime's resource stream and are not
+individually visible to layers.

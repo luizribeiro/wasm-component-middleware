@@ -20,7 +20,7 @@ fn http_allowlist_example_prints_trace_body_and_denial() {
     let output =
         test_guests::run_example("wasm-component-middleware-wasi-http", "http-allowlist").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert_eq!(
         strip_ports(&String::from_utf8(output.stdout).unwrap()),
         concat!(

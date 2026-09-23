@@ -1802,7 +1802,7 @@ async fn dropping_a_store_with_a_pending_p3_call_does_not_panic() {
 fn wasi_example_prints_the_trace_and_guest_output() {
     let output = test_guests::run_example("wasm-component-middleware-wasi", "wasi-p2").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "Hello from WASI at 1700000000.123456789\n"
@@ -1828,7 +1828,7 @@ fn wasi_example_prints_the_trace_and_guest_output() {
 fn wasi_p3_example_prints_the_trace_and_guest_output() {
     let output = test_guests::run_example("wasm-component-middleware-wasi", "wasi-p3").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "Hello from WASI at 1700000000.123456789\n"
@@ -1850,7 +1850,7 @@ fn wasi_p3_example_prints_the_trace_and_guest_output() {
 fn byte_budget_example_reports_the_relay_denial() {
     let output = test_guests::run_example("wasm-component-middleware-wasi", "byte-budget").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         "stream read: 106496 bytes in 13 chunks, denied\n"
@@ -1869,7 +1869,7 @@ fn byte_budget_example_reports_the_relay_denial() {
 fn random_example_prints_the_trace_and_refusal() {
     let output = test_guests::run_example("wasm-component-middleware-wasi", "random").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "dice: 6, 6; bytes: [1, 1, 1, 1]\n"
@@ -1917,7 +1917,7 @@ fn net_allowlist_example_traces_addresses_and_reports_access() {
     let output =
         test_guests::run_example("wasm-component-middleware-wasi", "net-allowlist").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         concat!(
@@ -2003,7 +2003,7 @@ fn net_allowlist_example_traces_addresses_and_reports_access() {
 fn sandbox_example_prints_file_policy_results_and_handle_traces() {
     let output = test_guests::run_example("wasm-component-middleware-wasi", "sandbox").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         concat!(

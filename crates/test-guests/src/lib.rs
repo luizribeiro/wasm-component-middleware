@@ -58,6 +58,19 @@ pub fn run_example(package: &str, example: &str) -> io::Result<Output> {
     unreachable!()
 }
 
+/// Panics with the example's standard error when it exited unsuccessfully.
+///
+/// # Panics
+///
+/// Panics when `output` records a failed exit status.
+pub fn assert_example_succeeded(output: &Output) {
+    assert!(
+        output.status.success(),
+        "example failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn example_lock() -> io::Result<File> {
     let target = target_dir();
     std::fs::create_dir_all(&target)?;

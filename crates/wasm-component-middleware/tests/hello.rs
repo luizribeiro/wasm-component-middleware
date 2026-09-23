@@ -166,7 +166,7 @@ fn unrouted_import_is_named_before_instantiation() {
 fn trace_example_prints_nested_calls_and_greeting() {
     let output = test_guests::run_example("wasm-component-middleware", "trace").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "Hello, Ada!\n");
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
@@ -178,7 +178,7 @@ fn trace_example_prints_nested_calls_and_greeting() {
 fn deny_example_refuses_one_store_and_allows_the_next() {
     let output = test_guests::run_example("wasm-component-middleware", "deny").unwrap();
 
-    assert!(output.status.success());
+    test_guests::assert_example_succeeded(&output);
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),

@@ -4,7 +4,7 @@ use wasmtime::component::{Access, Accessor, HasData};
 
 use crate::chain::{ActiveLayers, CancellationQueue, PendingCancellation, outcome};
 use crate::types::OwnedCall;
-use crate::{Call, Chain, Completion, MiddlewareView, Outcome};
+use crate::{Call, Chain, Completion, Denied, MiddlewareView, Outcome};
 
 /// Lends mutable store data to a synchronous closure.
 ///
@@ -35,7 +35,70 @@ where
     }
 }
 
+impl<S> StateAccess<S> for &mut S {
+    fn with_state<R>(&mut self, operation: impl FnOnce(&mut S) -> R) -> R {
+        operation(self)
+    }
+}
+
 impl<S: 'static> Chain<S> {
+    /// Runs an asynchronous body with mutable access to an access wrapper.
+    ///
+    /// This combines [`Chain::dispatch_access`] with the cancellation behavior
+    /// of [`Chain::dispatch_async`] for host methods that take [`Access`] by
+    /// value and remain asynchronous.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal from a layer or an error from `body`.
+    pub async fn dispatch_access_async<A, P, R>(
+        &self,
+        mut access: A,
+        call: &Call<'_>,
+        parameters: P,
+        body: impl AsyncFnOnce(&mut A, P) -> wasmtime::Result<(R, Completion)>,
+    ) -> wasmtime::Result<R>
+    where
+        A: StateAccess<S>,
+        S: MiddlewareView,
+    {
+        let (guard, denial) = self.start_async_dispatch(&mut access, call);
+        let result = match denial {
+            Some(denied) => Err(denied.into()),
+            None => body(&mut access, parameters).await,
+        };
+        Self::finish_async_dispatch(guard, &mut access, call, result)
+    }
+
+    /// Runs a borrowed-state asynchronous body between middleware hooks.
+    ///
+    /// Use this when a host trait lends `&mut S` to an async method instead of
+    /// exposing a Wasmtime [`Accessor`]. The WIT functions that require this
+    /// helper are not declared `async`; dropping the returned future therefore
+    /// covers host-side abandonment and store teardown, not guest subtask
+    /// cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal from a layer or an error from `body`.
+    pub async fn dispatch_state_async<R>(
+        &self,
+        state: &mut S,
+        call: &Call<'_>,
+        body: impl AsyncFnOnce(&mut S) -> wasmtime::Result<(R, Completion)>,
+    ) -> wasmtime::Result<R>
+    where
+        S: MiddlewareView,
+    {
+        let mut access = state;
+        let (guard, denial) = self.start_async_dispatch(&mut access, call);
+        let result = match denial {
+            Some(denied) => Err(denied.into()),
+            None => body(access).await,
+        };
+        Self::finish_async_dispatch(guard, &mut access, call, result)
+    }
+
     /// Runs a synchronous store-aware body between middleware hooks.
     ///
     /// # Errors
@@ -87,23 +150,50 @@ impl<S: 'static> Chain<S> {
         F: FnOnce() -> Fut,
         Fut: Future<Output = wasmtime::Result<(R, Completion)>>,
     {
+        let (guard, denial) = self.start_async_dispatch(&mut access, call);
+        let result = match denial {
+            Some(denied) => Err(denied.into()),
+            None => body().await,
+        };
+        Self::finish_async_dispatch(guard, &mut access, call, result)
+    }
+
+    fn start_async_dispatch<A>(
+        &self,
+        access: &mut A,
+        call: &Call<'_>,
+    ) -> (CancellationGuard<S>, Option<Denied>)
+    where
+        A: StateAccess<S>,
+        S: MiddlewareView,
+    {
         let (cancellations, frames, denial) = access.with_state(|state| {
             Self::deliver_cancellations(state);
             let cancellations = state.middleware().cancellations();
             let (frames, denial) = self.before(state, call);
             (cancellations, frames, denial)
         });
-        let mut guard = CancellationGuard {
-            cancellations,
-            call: Some(OwnedCall::from_call(call)),
-            frames: Some(frames),
-        };
-        let result = match denial {
-            Some(denied) => Err(denied.into()),
-            None => body().await,
-        };
+        (
+            CancellationGuard {
+                cancellations,
+                call: Some(OwnedCall::from_call(call)),
+                frames: Some(frames),
+            },
+            denial,
+        )
+    }
+
+    fn finish_async_dispatch<A, R>(
+        mut guard: CancellationGuard<S>,
+        access: &mut A,
+        call: &Call<'_>,
+        result: wasmtime::Result<(R, Completion)>,
+    ) -> wasmtime::Result<R>
+    where
+        A: StateAccess<S>,
+    {
         let outcome = outcome(result.as_ref().map(|(_, completion)| completion));
-        guard.finish(&mut access, call, outcome);
+        guard.finish(access, call, outcome);
         result.map(|(value, _)| value)
     }
 }
@@ -228,6 +318,218 @@ mod tests {
         }
     }
 
+    async fn record_access_body(
+        access: &mut &MemoryAccess,
+        value: i32,
+    ) -> wasmtime::Result<(i32, Completion)> {
+        access.with_state(|state| state.events.push("body".into()));
+        Ok((value, Completion { produced: vec![9] }))
+    }
+
+    async fn record_send_access_body(
+        access: &mut &SendAccess,
+        value: i32,
+    ) -> wasmtime::Result<(i32, Completion)> {
+        access.with_state(|state| state.events.push("body".into()));
+        Ok((value, Completion::default()))
+    }
+
+    #[test]
+    fn dispatches_a_borrowed_state_future() {
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let mut state = State::new(&chain);
+
+        let value = run_ready(chain.dispatch_state_async(
+            &mut state,
+            &call(),
+            async |state: &mut State| {
+                state.events.push("body".into());
+                Ok((17, Completion::default()))
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(value, 17);
+        assert_eq!(
+            state.events,
+            ["before observer", "body", "after observer returned []"]
+        );
+    }
+
+    #[test]
+    fn dispatches_an_access_future() {
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let access = MemoryAccess(RefCell::new(State::new(&chain)));
+
+        let value =
+            run_ready(chain.dispatch_access_async(&access, &call(), 17, record_access_body))
+                .unwrap();
+
+        assert_eq!(value, 17);
+        assert_eq!(
+            access.0.borrow().events,
+            ["before observer", "body", "after observer returned [9]"]
+        );
+    }
+
+    #[test]
+    fn borrowed_state_future_reports_body_failure() {
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let mut state = State::new(&chain);
+
+        let error = run_ready(chain.dispatch_state_async(
+            &mut state,
+            &call(),
+            async |_state: &mut State| {
+                Err::<((), Completion), _>(wasmtime::Error::msg("body failed"))
+            },
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "body failed");
+        assert_eq!(state.events, ["before observer", "after observer failed"]);
+    }
+
+    #[test]
+    fn borrowed_state_future_reports_denial_without_running_body() {
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let mut state = State::new(&chain);
+        state.deny = true;
+        let body_ran = Cell::new(false);
+
+        let error = run_ready(chain.dispatch_state_async(
+            &mut state,
+            &call(),
+            async |_state: &mut State| {
+                body_ran.set(true);
+                Ok(((), Completion::default()))
+            },
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.downcast_ref::<Denied>().unwrap().reason(), "blocked");
+        assert!(!body_ran.get());
+        assert_eq!(state.events, ["before observer"]);
+    }
+
+    #[test]
+    fn access_future_reports_body_failure() {
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let access = MemoryAccess(RefCell::new(State::new(&chain)));
+
+        let error = run_ready(chain.dispatch_access_async(
+            &access,
+            &call(),
+            (),
+            async |_access: &mut &MemoryAccess, (): ()| {
+                Err::<((), Completion), _>(wasmtime::Error::msg("body failed"))
+            },
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "body failed");
+        assert_eq!(
+            access.0.borrow().events,
+            ["before observer", "after observer failed"]
+        );
+    }
+
+    #[test]
+    fn access_future_reports_denial_without_running_body() {
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let mut state = State::new(&chain);
+        state.deny = true;
+        let access = MemoryAccess(RefCell::new(state));
+        let body_ran = Cell::new(false);
+
+        let error = run_ready(chain.dispatch_access_async(
+            &access,
+            &call(),
+            (),
+            async |_access: &mut &MemoryAccess, (): ()| {
+                body_ran.set(true);
+                Ok(((), Completion::default()))
+            },
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.downcast_ref::<Denied>().unwrap().reason(), "blocked");
+        assert!(!body_ran.get());
+        assert_eq!(access.0.borrow().events, ["before observer"]);
+    }
+
+    #[test]
+    fn cancelled_borrowed_state_future_is_delivered_before_the_next_call() {
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let mut state = State::new(&chain);
+        let call = call();
+        let mut future = Box::pin(chain.dispatch_state_async(
+            &mut state,
+            &call,
+            async |_state: &mut State| pending::<wasmtime::Result<((), Completion)>>().await,
+        ));
+        let mut context = Context::from_waker(Waker::noop());
+
+        assert!(future.as_mut().poll(&mut context).is_pending());
+        drop(future);
+        assert_eq!(state.events, ["before observer"]);
+
+        run_ready(chain.dispatch_state_async(
+            &mut state,
+            &Call::new(2, Direction::Import, "next"),
+            async |_state: &mut State| Ok(((), Completion::default())),
+        ))
+        .unwrap();
+
+        assert_eq!(
+            state.events,
+            [
+                "before observer",
+                "after observer cancelled",
+                "before observer",
+                "after observer returned []",
+            ]
+        );
+    }
+
+    #[test]
+    fn cancelled_access_future_is_delivered_before_the_next_call() {
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let access = MemoryAccess(RefCell::new(State::new(&chain)));
+        let call = call();
+        let mut future = Box::pin(chain.dispatch_access_async(
+            &access,
+            &call,
+            (),
+            async |_access: &mut &MemoryAccess, (): ()| {
+                pending::<wasmtime::Result<((), Completion)>>().await
+            },
+        ));
+        let mut context = Context::from_waker(Waker::noop());
+
+        assert!(future.as_mut().poll(&mut context).is_pending());
+        drop(future);
+        assert_eq!(access.0.borrow().events, ["before observer"]);
+
+        run_ready(chain.dispatch_access_async(
+            &access,
+            &Call::new(2, Direction::Import, "next"),
+            (),
+            async |_access: &mut &MemoryAccess, (): ()| Ok(((), Completion::default())),
+        ))
+        .unwrap();
+
+        assert_eq!(
+            access.0.borrow().events,
+            [
+                "before observer",
+                "after observer cancelled",
+                "before observer",
+                "after observer returned []",
+            ]
+        );
+    }
+
     #[test]
     fn reports_returned_completion() {
         let chain = Chain::builder().layer(Observer("observer")).build();
@@ -338,5 +640,31 @@ mod tests {
         assert_send(
             chain.dispatch_async(&access, &call, || async { Ok(((), Completion::default())) }),
         );
+    }
+
+    #[test]
+    fn borrowed_state_dispatch_future_is_send_when_inputs_are_send() {
+        fn assert_send(_: impl Send) {}
+
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let mut state = State::new(&chain);
+        let call = call();
+
+        assert_send(
+            chain.dispatch_state_async(&mut state, &call, async |_state: &mut State| {
+                Ok(((), Completion::default()))
+            }),
+        );
+    }
+
+    #[test]
+    fn access_dispatch_future_is_send_when_inputs_are_send() {
+        fn assert_send(_: impl Send) {}
+
+        let chain = Chain::builder().layer(Observer("observer")).build();
+        let access = SendAccess(Mutex::new(State::new(&chain)));
+        let call = call();
+
+        assert_send(chain.dispatch_access_async(&access, &call, 17, record_send_access_body));
     }
 }

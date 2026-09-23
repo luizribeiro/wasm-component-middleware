@@ -1585,6 +1585,36 @@ fn wasi_p3_example_prints_the_trace_and_guest_output() {
 }
 
 #[test]
+fn byte_budget_example_reports_the_relay_denial() {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "run",
+            "--quiet",
+            "-p",
+            "wasm-component-middleware-wasi",
+            "--example",
+            "byte-budget",
+            "--locked",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "stream read: 106496 bytes in 13 chunks, denied\n"
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        concat!(
+            "first guest: bytes=65536, checksum=0xe5f393b4c91013d4, completion=ok\n",
+            "second guest: bytes=32768, checksum=0x9c33ddd05aba538c, ",
+            "completion=ErrorCode::Access\n",
+        )
+    );
+}
+
+#[test]
 fn sandbox_example_prints_file_policy_results_and_handle_traces() {
     let output = Command::new(env!("CARGO"))
         .args([

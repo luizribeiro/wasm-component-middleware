@@ -1,0 +1,13 @@
+[package]
+name = "http-p3"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+http-body-util = "0.1"
+wasip3.workspace = true
+wit-bindgen.workspace = true

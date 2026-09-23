@@ -146,6 +146,18 @@ pub fn hello() -> &'static Path {
     Path::new(env!("HELLO_COMPONENT"))
 }
 
+/// Returns the path to the Preview 2 outgoing HTTP client.
+#[must_use]
+pub fn http_p2() -> &'static Path {
+    Path::new(env!("HTTP_P2_COMPONENT"))
+}
+
+/// Returns the path to the Preview 3 outgoing HTTP client.
+#[must_use]
+pub fn http_p3() -> &'static Path {
+    Path::new(env!("HTTP_P3_COMPONENT"))
+}
+
 /// Returns the path to the guest that imports unstable socket error conversion.
 #[must_use]
 pub fn network_error_code() -> &'static Path {

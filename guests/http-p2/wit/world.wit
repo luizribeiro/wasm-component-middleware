@@ -1,0 +1,5 @@
+package example:http-p2;
+
+world client {
+  export fetch: func(authority: string) -> result<string, string>;
+}

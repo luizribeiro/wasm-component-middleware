@@ -1,0 +1,5 @@
+package example:http-p3;
+
+world client {
+  export fetch: async func(authority: string) -> result<string, string>;
+}

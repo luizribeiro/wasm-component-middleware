@@ -2,6 +2,8 @@
 resolver = "3"
 members = [
   "hello",
+  "http-p2",
+  "http-p3",
   "network-error-code",
   "sandbox",
   "smoke-p2",
@@ -17,4 +19,6 @@ rust-version = "1.96"
 version = "0.0.0"
 
 [workspace.dependencies]
+wasip2 = "1.0.4"
+wasip3 = { version = "0.7.1", features = ["http-compat"] }
 wit-bindgen = "0.62"

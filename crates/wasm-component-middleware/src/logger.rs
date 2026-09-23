@@ -101,9 +101,14 @@ where
                 |version| format!("{interface}@{version}."),
             )
         });
+        let handles = if call.handles.is_empty() {
+            String::new()
+        } else {
+            format!(" handles={:?}", call.handles)
+        };
         let _ = writeln!(
             self.lock_writer(),
-            "{}→ #{} {} {interface}{}({args})",
+            "{}→ #{} {} {interface}{}({args}){handles}",
             "  ".repeat(depth),
             call.id,
             call.direction,
@@ -254,7 +259,10 @@ mod tests {
             )),
         };
         let args = Arguments::new().with("message", ArgumentValue::bytes(b"Hello, middleware!"));
-        let call = Call::new(chain.next_id(), Direction::Export, "greet").with_args(&args);
+        let handles = [3];
+        let call = Call::new(chain.next_id(), Direction::Export, "greet")
+            .with_handles(&handles)
+            .with_args(&args);
 
         chain
             .dispatch(&mut state, &call, |_| {
@@ -266,7 +274,7 @@ mod tests {
             let bytes = output.lock().unwrap().clone();
             assert_eq!(
                 String::from_utf8(bytes).unwrap(),
-                "→ #1 export greet(message=18 bytes \"Hello, middleware!\")\n← #1 returned produced=[7]\n"
+                "→ #1 export greet(message=18 bytes \"Hello, middleware!\") handles=[3]\n← #1 returned produced=[7]\n"
             );
         }
     }

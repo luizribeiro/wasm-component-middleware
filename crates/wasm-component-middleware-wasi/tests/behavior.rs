@@ -1060,9 +1060,9 @@ fn wasi_example_prints_the_trace_and_guest_output() {
             "← #2 returned\n",
             "→ #3 import wasi:cli/stdout@0.2.12.get-stdout()\n",
             "← #3 returned produced=[0]\n",
-            "→ #4 import wasi:io/streams@0.2.12.[method]output-stream.blocking-write-and-flush(bytes=40 bytes \"Hello from WASI at 17000…\")\n",
+            "→ #4 import wasi:io/streams@0.2.12.[method]output-stream.blocking-write-and-flush(bytes=40 bytes \"Hello from WASI at 17000…\") handles=[0]\n",
             "← #4 returned\n",
-            "→ #5 import wasi:io/streams@0.2.12.[resource-drop]output-stream()\n",
+            "→ #5 import wasi:io/streams@0.2.12.[resource-drop]output-stream() handles=[0]\n",
             "← #5 returned\n",
         )
     );
@@ -1130,7 +1130,7 @@ fn sandbox_example_prints_file_policy_results_and_handle_traces() {
     );
     let trace = String::from_utf8(output.stderr).unwrap();
     assert!(trace.contains("get-directories()\n← #1 returned produced=[0, 1]"));
-    assert!(trace.contains("[resource-drop]descriptor()"));
+    assert!(trace.contains("[resource-drop]descriptor() handles=["));
     assert!(trace.contains("failed: open file limit of 4 reached"));
     assert!(trace.contains("failed: descriptor is private"));
     assert!(trace.contains("failed: not-permitted"));

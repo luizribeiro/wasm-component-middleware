@@ -29,6 +29,12 @@ pub fn unrouted_import() -> &'static Path {
     Path::new(env!("UNROUTED_IMPORT_COMPONENT"))
 }
 
+/// Returns the path to the guest that exercises synchronous Preview 2 calls.
+#[must_use]
+pub fn wasi_p2() -> &'static Path {
+    Path::new(env!("WASI_P2_COMPONENT"))
+}
+
 #[cfg(test)]
 mod tests {
     use wasmtime::component::{Component, Linker, ResourceTable};

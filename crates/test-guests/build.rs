@@ -48,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "UNROUTED_IMPORT_COMPONENT",
         &release_dir.join("unrouted_import.wasm"),
     );
+    emit_guest_path("WASI_P2_COMPONENT", &release_dir.join("wasi_p2.wasm"));
     println!(
         "cargo::rerun-if-changed={}",
         crate_dir.join("../../guests").display()

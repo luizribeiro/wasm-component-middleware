@@ -1,0 +1,12 @@
+[package]
+name = "wasi-p2"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasi = "0.14.7"
+wit-bindgen.workspace = true

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hello", "smoke-p2", "smoke-p3", "unrouted-import"]
+members = ["hello", "smoke-p2", "smoke-p3", "unrouted-import", "wasi-p2"]
 
 [workspace.package]
 edition = "2024"

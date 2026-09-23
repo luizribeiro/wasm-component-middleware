@@ -1,0 +1,74 @@
+#![allow(missing_docs)]
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use wasm_component_middleware::{Chain, InvocationContext, Logger, MiddlewareCtx, MiddlewareView};
+use wasmtime::component::{Component, Linker, ResourceTable};
+use wasmtime::{Engine, Store};
+use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
+use wasmtime_wasi::{HostWallClock, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+
+wasmtime::component::bindgen!({
+    path: "../../guests/wasi-p2/wit",
+    world: "workload",
+});
+
+struct State {
+    middleware: Option<MiddlewareCtx<Self>>,
+    table: ResourceTable,
+    wasi: WasiCtx,
+}
+
+impl MiddlewareView for State {
+    fn middleware(&mut self) -> &mut MiddlewareCtx<Self> {
+        self.middleware.as_mut().unwrap()
+    }
+}
+
+impl WasiView for State {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+struct ReviewClock;
+
+impl HostWallClock for ReviewClock {
+    fn resolution(&self) -> Duration {
+        Duration::from_nanos(1)
+    }
+
+    fn now(&self) -> Duration {
+        Duration::new(1_700_000_000, 123_456_789)
+    }
+}
+
+fn main() -> wasmtime::Result<()> {
+    let engine = Engine::default();
+    let component = Component::from_file(&engine, test_guests::wasi_p2())?;
+    let mut linker = Linker::new(&engine);
+    wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker)?;
+
+    let stdout = MemoryOutputPipe::new(4096);
+    let mut wasi = WasiCtxBuilder::new();
+    wasi.env("GREETING", "Hello from WASI")
+        .stdout(stdout.clone())
+        .wall_clock(ReviewClock);
+    let chain = Arc::new(Chain::builder().layer(Logger::stderr()).build());
+    let mut store = Store::new(
+        &engine,
+        State {
+            middleware: Some(MiddlewareCtx::new(chain, InvocationContext::new("wasi-p2"))),
+            table: ResourceTable::new(),
+            wasi: wasi.build(),
+        },
+    );
+    let guest = Workload::instantiate(&mut store, &component, &linker)?;
+    guest.call_basic_system(&mut store)?;
+    print!("{}", String::from_utf8(stdout.contents().to_vec())?);
+    Ok(())
+}

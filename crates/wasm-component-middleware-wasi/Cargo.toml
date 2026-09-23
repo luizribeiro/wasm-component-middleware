@@ -12,5 +12,13 @@ wasm-component-middleware = { path = "../wasm-component-middleware", version = "
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 
+[dev-dependencies]
+bytes = "1"
+test-guests = { path = "../test-guests" }
+tokio.workspace = true
+wasmtime = { workspace = true, features = ["cranelift"] }
+wit-component = { version = "0.258", features = ["dummy-module"] }
+wit-parser = "0.258"
+
 [lints]
 workspace = true

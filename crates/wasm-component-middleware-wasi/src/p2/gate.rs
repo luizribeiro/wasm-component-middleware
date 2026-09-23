@@ -2,6 +2,8 @@ use std::marker::PhantomData;
 
 use wasmtime::component::HasData;
 
+pub(super) const WASI_VERSION: &str = "0.2.12";
+
 pub(super) struct Gate<'a, T> {
     pub(super) state: &'a mut T,
 }
@@ -62,7 +64,7 @@ macro_rules! gate {
             id: chain.next_id(),
             direction: wasm_component_middleware::Direction::Import,
             interface: Some($interface),
-            version: Some("0.2.12"),
+            version: Some($crate::p2::gate::WASI_VERSION),
             function: $function,
             handles: &handles,
             args: &arguments,
@@ -91,3 +93,42 @@ macro_rules! gate {
 }
 
 pub(super) use gate;
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use wit_parser::Resolve;
+
+    use super::WASI_VERSION;
+
+    #[test]
+    fn reported_version_matches_every_vendored_dependency() {
+        let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
+        let dependency_count = fs::read_dir(wit.join("deps"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "wit")
+            })
+            .count();
+        let mut resolve = Resolve::default();
+        resolve.push_dir(wit).unwrap();
+        let versions = resolve
+            .packages
+            .iter()
+            .filter_map(|(_, package)| package.name.version.as_ref())
+            .collect::<Vec<_>>();
+
+        assert_eq!(versions.len(), dependency_count);
+        assert!(
+            versions
+                .iter()
+                .all(|version| version.to_string() == WASI_VERSION)
+        );
+    }
+}

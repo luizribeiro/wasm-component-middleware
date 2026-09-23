@@ -1,0 +1,10 @@
+package example:wasi-p2;
+
+world workload {
+  export observe: func() -> string;
+  export basic-system: func();
+  export write-stdout: func() -> bool;
+    export exercise: func() -> string;
+  export exit-success: func();
+  export exit-code: func();
+}

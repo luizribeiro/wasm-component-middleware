@@ -45,7 +45,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "hello"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.62.0",
 ]
 
 [[package]]
@@ -181,14 +181,14 @@ dependencies = [
 name = "smoke-p2"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.62.0",
 ]
 
 [[package]]
 name = "smoke-p3"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.62.0",
 ]
 
 [[package]]
@@ -212,7 +212,33 @@ checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
 name = "unrouted-import"
 version = "0.0.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.62.0",
+]
+
+[[package]]
+name = "wasi"
+version = "0.14.7+wasi-0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "883478de20367e224c0090af9cf5f9fa85bed63a95c1abf3afc5c083ebc06e8c"
+dependencies = [
+ "wasip2",
+]
+
+[[package]]
+name = "wasi-p2"
+version = "0.0.0"
+dependencies = [
+ "wasi",
+ "wit-bindgen 0.62.0",
+]
+
+[[package]]
+name = "wasip2"
+version = "1.0.4+wasi-0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+dependencies = [
+ "wit-bindgen 0.57.1",
 ]
 
 [[package]]
@@ -247,6 +273,15 @@ dependencies = [
  "hashbrown",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "wit-bindgen"
+version = "0.57.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+dependencies = [
+ "bitflags",
 ]
 
 [[package]]

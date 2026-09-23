@@ -3,6 +3,9 @@
 //! Use this crate to apply component-call middleware to the WASI HTTP adapter
 //! while sharing the core and WASI integration crates.
 
+mod gate;
+pub mod p2;
+
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use http::{HeaderName, uri::Scheme};

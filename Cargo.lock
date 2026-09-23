@@ -1584,6 +1584,7 @@ dependencies = [
  "wasm-component-middleware",
  "wasm-component-middleware-wasi",
  "wasmtime",
+ "wasmtime-wasi",
  "wasmtime-wasi-http",
 ]
 

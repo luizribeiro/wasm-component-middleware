@@ -232,7 +232,19 @@ impl Guest for Component {
         } else {
             denied
         };
-        format!("allowed: {allowed}\ndenied: {denied}\n")
+        let udp_denied = send_datagram(&network, address, denied_port);
+        let udp_allowed = send_datagram(&network, address, allowed_port);
+        let udp_denied = match udp_denied {
+            Err(ErrorCode::AccessDenied) => "access-denied".to_owned(),
+            result => format!("{result:?}"),
+        };
+        let udp_allowed = match udp_allowed {
+            Ok(1) => "delivered".to_owned(),
+            result => format!("{result:?}"),
+        };
+        format!(
+            "allowed: {allowed}\ndenied: {denied}\nudp allowed: {udp_allowed}\nudp denied: {udp_denied}\n"
+        )
     }
 }
 
@@ -604,4 +616,32 @@ fn connect_and_echo(
     output.blocking_write_and_flush(b"hello").unwrap();
     let echo = input.blocking_read(5).unwrap();
     Ok(String::from_utf8_lossy(&echo).into_owned())
+}
+
+fn send_datagram(
+    network: &wasi::sockets::network::Network,
+    address: wasi::sockets::network::Ipv4Address,
+    port: u16,
+) -> Result<u64, wasi::sockets::network::ErrorCode> {
+    use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
+    use wasi::sockets::udp::OutgoingDatagram;
+
+    let socket = wasi::sockets::udp_create_socket::create_udp_socket(IpAddressFamily::Ipv4)?;
+    socket.start_bind(
+        network,
+        IpSocketAddress::Ipv4(Ipv4SocketAddress {
+            address: (127, 0, 0, 1),
+            port: 0,
+        }),
+    )?;
+    socket.finish_bind()?;
+    let (_, outgoing) = socket.stream(None)?;
+    let ready = outgoing.subscribe();
+    while outgoing.check_send()? == 0 {
+        ready.block();
+    }
+    outgoing.send(&[OutgoingDatagram {
+        data: b"udp".to_vec(),
+        remote_address: Some(IpSocketAddress::Ipv4(Ipv4SocketAddress { address, port })),
+    }])
 }

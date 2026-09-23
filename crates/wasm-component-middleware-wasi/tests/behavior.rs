@@ -1750,6 +1750,86 @@ fn random_example_prints_the_trace_and_refusal() {
     );
 }
 
+fn strip_loopback_ports(output: &str) -> String {
+    const PREFIX: &str = "127.0.0.1:";
+    let mut stripped = String::with_capacity(output.len());
+    let mut remainder = output;
+    while let Some(index) = remainder.find(PREFIX) {
+        let port = &remainder[index + PREFIX.len()..];
+        let digits = port.chars().take_while(char::is_ascii_digit).count();
+        stripped.push_str(&remainder[..index]);
+        stripped.push_str(PREFIX);
+        stripped.push_str("<port>");
+        remainder = &port[digits..];
+    }
+    stripped.push_str(remainder);
+    stripped
+}
+
+#[test]
+fn net_allowlist_example_traces_addresses_and_reports_access() {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "run",
+            "--quiet",
+            "-p",
+            "wasm-component-middleware-wasi",
+            "--example",
+            "net-allowlist",
+            "--locked",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        concat!(
+            "allowed: hello\n",
+            "denied: access-denied\n",
+            "udp allowed: delivered\n",
+            "udp denied: access-denied\n",
+        )
+    );
+    let trace = strip_loopback_ports(&String::from_utf8(output.stderr).unwrap());
+    let connects = trace
+        .lines()
+        .filter(|line| line.contains("[method]tcp-socket.start-connect"))
+        .collect::<Vec<_>>();
+    assert_eq!(connects.len(), 2, "{trace}");
+    assert!(connects.iter().all(|line| {
+        line.contains("remote_address=\"127.0.0.1:<port>\"") && line.contains("handles=")
+    }));
+    let streams = trace
+        .lines()
+        .filter(|line| line.contains("[method]udp-socket.stream"))
+        .collect::<Vec<_>>();
+    assert_eq!(streams.len(), 2, "{trace}");
+    assert!(
+        streams
+            .iter()
+            .all(|line| line.contains("remote_address=none") && line.contains("handles="))
+    );
+    let sends = trace
+        .lines()
+        .filter(|line| line.contains("[method]outgoing-datagram-stream.send"))
+        .collect::<Vec<_>>();
+    assert_eq!(sends.len(), 2, "{trace}");
+    assert!(
+        sends.iter().all(|line| {
+            line.contains("some(\"127.0.0.1:<port>\")") && line.contains("handles=")
+        })
+    );
+    assert!(trace.contains("returned\n"), "{trace}");
+    assert_eq!(
+        trace
+            .matches("failed: remote address is not allowed\n")
+            .count(),
+        2,
+        "{trace}"
+    );
+}
+
 #[test]
 fn sandbox_example_prints_file_policy_results_and_handle_traces() {
     let output = Command::new(env!("CARGO"))

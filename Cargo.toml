@@ -11,9 +11,10 @@ version = "0.0.0"
 
 [workspace.dependencies]
 anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 wasmtime = { version = "49", default-features = false, features = [
-  "async",
   "component-model",
+  "component-model-async",
   "runtime",
 ] }
 wasmtime-wasi = "49"

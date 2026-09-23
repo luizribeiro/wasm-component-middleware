@@ -1,0 +1,9 @@
+package test:smoke-p2;
+
+interface greeter {
+  greet: func(name: string) -> string;
+}
+
+world smoke-p2 {
+  export greeter;
+}

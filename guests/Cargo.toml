@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["smoke-p2", "smoke-p3"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96"
+version = "0.0.0"
+
+[workspace.dependencies]
+wit-bindgen = "0.62"

@@ -154,13 +154,42 @@ fn network_error_conversion_requires_the_option_and_reaches_the_chain() {
         "{error}"
     );
 
+    let mut options = wasmtime_wasi::p2::bindings::sync::LinkOptions::default();
+    options.network_error_code(true);
+    let chain = Chain::builder().build();
+    let mut plain_linker = Linker::<State>::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_with_options_sync(&mut plain_linker, &options).unwrap();
+    let mut plain_store = Store::new(&engine, state(&chain));
+    let plain_instance = plain_linker
+        .instantiate(&mut plain_store, &component)
+        .unwrap();
+    let plain_probe = plain_instance
+        .get_typed_func::<(), (bool,)>(&mut plain_store, "probe")
+        .unwrap();
+    let plain = plain_probe.call(&mut plain_store, ()).unwrap();
+
+    let mut gated_linker = Linker::<State>::new(&engine);
+    wasm_component_middleware_wasi::p2::add_to_linker_with_options_sync(
+        &mut gated_linker,
+        &options,
+    )
+    .unwrap();
+    let mut gated_store = Store::new(&engine, state(&chain));
+    let gated_instance = gated_linker
+        .instantiate(&mut gated_store, &component)
+        .unwrap();
+    let gated_probe = gated_instance
+        .get_typed_func::<(), (bool,)>(&mut gated_store, "probe")
+        .unwrap();
+    let gated = gated_probe.call(&mut gated_store, ()).unwrap();
+
+    assert_eq!(gated, plain);
+
     let reached = Arc::new(AtomicBool::new(false));
     let chain = Chain::builder()
         .layer(ObserveNetworkErrorCode(Arc::clone(&reached)))
         .build();
     let mut linker = Linker::<State>::new(&engine);
-    let mut options = wasmtime_wasi::p2::bindings::sync::LinkOptions::default();
-    options.network_error_code(true);
     wasm_component_middleware_wasi::p2::add_to_linker_with_options_sync(&mut linker, &options)
         .unwrap();
     let mut store = Store::new(&engine, state(&chain));

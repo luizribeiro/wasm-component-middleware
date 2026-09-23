@@ -51,6 +51,13 @@ mod p2_async {
     });
 }
 
+mod sandbox_guest {
+    wasmtime::component::bindgen!({
+        path: "../../guests/sandbox/wit",
+        world: "sandbox",
+    });
+}
+
 struct State {
     middleware: Option<MiddlewareCtx<Self>>,
     table: ResourceTable,
@@ -2030,6 +2037,60 @@ async fn command_guests_match_plain_wasi() {
         assert_eq!(gated, plain);
         assert_eq!(plain, b"differential output\n");
     }
+}
+
+#[test]
+fn sandbox_guest_matches_plain_wasi() {
+    let plain = run_sandbox_guest(false).unwrap();
+    let gated = run_sandbox_guest(true).unwrap();
+
+    assert_eq!(gated, plain);
+}
+
+fn run_sandbox_guest(gated: bool) -> wasmtime::Result<Vec<u8>> {
+    let directory = tempfile::tempdir()?;
+    let public = directory.path().join("public");
+    let private = directory.path().join("private");
+    fs::create_dir(&public)?;
+    fs::create_dir(&private)?;
+    for (name, contents) in [
+        ("note.txt", "hello"),
+        ("one.txt", "one"),
+        ("two.txt", "two"),
+        ("three.txt", "three"),
+    ] {
+        fs::write(public.join(name), contents)?;
+    }
+    fs::write(private.join("secret.txt"), "classified")?;
+
+    let engine = Engine::default();
+    let component = Component::from_file(&engine, test_guests::sandbox())?;
+    let mut linker = Linker::new(&engine);
+    if gated {
+        wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker)?;
+    } else {
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    }
+
+    let stdout = MemoryOutputPipe::new(4096);
+    let mut wasi = WasiCtxBuilder::new();
+    wasi.stdout(stdout.clone())
+        .preopened_dir(&public, "public", FsPerms::ReadWrite)?
+        .preopened_dir(&private, "private", FsPerms::ReadWrite)?;
+    let mut store = Store::new(
+        &engine,
+        State {
+            middleware: Some(MiddlewareCtx::new(
+                Chain::builder().build(),
+                InvocationContext::new("differential"),
+            )),
+            table: ResourceTable::new(),
+            wasi: wasi.build(),
+        },
+    );
+    let guest = sandbox_guest::Sandbox::instantiate(&mut store, &component, &linker)?;
+    guest.call_run(&mut store)?;
+    Ok(stdout.contents().to_vec())
 }
 
 async fn run_command_guest(

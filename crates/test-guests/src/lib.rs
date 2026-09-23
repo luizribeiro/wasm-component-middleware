@@ -22,10 +22,10 @@ const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// # Errors
 ///
 /// Returns an error when the process cannot be started, its output cannot be
-/// collected, its build exceeds five minutes, or two launch attempts each
+/// collected, its build exceeds five minutes, or three launch attempts each
 /// exceed one minute.
 pub fn run_example(package: &str, example: &str) -> io::Result<Output> {
-    let lock = example_lock()?;
+    let _lock = example_lock()?;
     let workspace = workspace_root();
     let mut build = Command::new(env!("CARGO"));
     build.current_dir(&workspace).args([
@@ -44,14 +44,12 @@ pub fn run_example(package: &str, example: &str) -> io::Result<Output> {
             String::from_utf8_lossy(&build.stderr)
         )));
     }
-    drop(lock);
-
     let executable = example_executable(example);
-    for attempt in 0..2 {
+    for attempt in 0..3 {
         let mut command = Command::new(&executable);
         command.current_dir(&workspace);
         match output_with_timeout(&mut command, EXAMPLE_TIMEOUT) {
-            Err(error) if error.kind() == io::ErrorKind::TimedOut && attempt == 0 => {}
+            Err(error) if error.kind() == io::ErrorKind::TimedOut && attempt < 2 => {}
             result => return result,
         }
     }

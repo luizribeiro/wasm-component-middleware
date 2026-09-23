@@ -67,6 +67,32 @@ $ cargo run --example trace
 Hello, Ada!
 ```
 
+## WASI
+
+Switch synchronous WASI Preview 2 calls into the same chain by changing the
+import used to populate the linker:
+
+```rust
+// use wasmtime_wasi::p2::add_to_linker_sync;
+use wasm_component_middleware_wasi::p2::add_to_linker_sync;
+
+add_to_linker_sync(&mut linker)?;
+```
+
+The [`wasi-p2` example](crates/wasm-component-middleware-wasi/examples/wasi-p2.rs)
+runs a Rust guest that reads an environment variable and the wall clock before
+writing to standard output:
+
+```console
+$ cargo run --example wasi-p2
+→ #1 import wasi:cli/environment@0.2.12.get-environment()
+← #1 returned
+→ #2 import wasi:clocks/wall-clock@0.2.12.now()
+← #2 returned
+...
+Hello from WASI at 1700000000.123456789
+```
+
 ## Refusing calls
 
 The [`deny` example](crates/wasm-component-middleware/examples/deny.rs) puts a

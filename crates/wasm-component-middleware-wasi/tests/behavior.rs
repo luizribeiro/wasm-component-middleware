@@ -21,6 +21,7 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::cli::{IsTerminal, StdinStream, StdoutStream};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::p2::{InputStream, OutputStream, Pollable, StreamResult};
+use wasmtime_wasi::random::Deterministic;
 use wasmtime_wasi::{
     FsPerms, HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
 };
@@ -353,6 +354,9 @@ impl P3Harness {
             .stdin(MemoryInputPipe::new("p3 input"))
             .stdout(stdout.clone())
             .stderr(stderr.clone())
+            .secure_random(Deterministic::new(vec![1, 2, 3, 4]))
+            .insecure_random(Deterministic::new(vec![9, 10, 11, 12]))
+            .insecure_random_seed(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff)
             .wall_clock(FixedWallClock)
             .monotonic_clock(ProgrammableMonotonicClock(Arc::clone(&monotonic_now)));
         let directory = preopen_fixture(&mut builder);
@@ -530,6 +534,9 @@ impl Harness {
                 pipe: stderr.clone(),
                 trace: io.clone(),
             })
+            .secure_random(Deterministic::new(vec![1, 2, 3, 4]))
+            .insecure_random(Deterministic::new(vec![9, 10, 11, 12]))
+            .insecure_random_seed(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff)
             .wall_clock(FixedWallClock)
             .monotonic_clock(FixedMonotonicClock);
         let directory = preopen_fixture(&mut builder);
@@ -798,6 +805,18 @@ fn refusing_environment_traps_the_guest() {
 }
 
 #[test]
+fn refusing_random_traps_the_guest() {
+    let chain = Chain::builder().layer(Refuse("get-random-u64")).build();
+    let mut harness = Harness::new(true, chain).unwrap();
+    let error = harness.guest.call_exercise(&mut harness.store).unwrap_err();
+
+    assert_eq!(
+        error.downcast_ref::<Denied>().unwrap().reason(),
+        "get-random-u64 is disabled"
+    );
+}
+
+#[test]
 fn refusing_blocking_write_is_a_guest_visible_stream_error() {
     let chain = Chain::builder()
         .layer(Refuse("[method]output-stream.blocking-write-and-flush"))
@@ -826,11 +845,19 @@ fn refusing_resource_drop_traps_the_guest() {
 
 #[tokio::test]
 async fn refusing_p3_calls_traps_the_guest() {
-    for function in ["get-environment", "write-via-stream"] {
+    for (function, exercise) in [
+        ("get-environment", false),
+        ("write-via-stream", false),
+        ("get-random-u64", true),
+    ] {
         let mut harness = P3Harness::new(true, Chain::builder().layer(Refuse(function)).build())
             .await
             .unwrap();
-        let error = harness.basic_system().await.unwrap_err();
+        let error = if exercise {
+            harness.exercise().await.unwrap_err()
+        } else {
+            harness.basic_system().await.unwrap_err()
+        };
 
         assert_eq!(
             error.downcast_ref::<Denied>().unwrap().reason(),
@@ -876,7 +903,24 @@ async fn refusing_p3_open_is_a_guest_visible_access_error() {
 #[test]
 fn gated_wasi_matches_plain_wasi() {
     assert_eq!(run(false).unwrap(), run(true).unwrap());
-    assert_eq!(run_exercise(false).unwrap(), run_exercise(true).unwrap());
+    let plain = run_exercise(false).unwrap();
+    let gated = run_exercise(true).unwrap();
+
+    assert_eq!(plain, gated);
+    assert!(
+        plain
+            .returned
+            .contains("random=[4, 4, 4, 4]:72623859723010820"),
+        "{}",
+        plain.returned
+    );
+    assert!(
+        plain
+            .returned
+            .contains("insecure=[12, 12, 12, 12]:651345242427624204"),
+        "{}",
+        plain.returned
+    );
 }
 
 #[derive(Default)]
@@ -1012,7 +1056,10 @@ async fn p3_streams_and_clock_waits_retain_their_distinct_semantics() {
     assert_eq!(
         plain_stdin,
         concat!(
-            "p3 input|16:16:true:alpha:DescriptorFlags(READ | WRITE):",
+            "p3 input|random=[4, 4, 4, 4]:72623859723010820|",
+            "insecure=[12, 12, 12, 12]:651345242427624204:",
+            "(9843086184167632639, 4822678189205111)|",
+            "16:16:true:alpha:DescriptorFlags(READ | WRITE):",
             "DescriptorType::RegularFile:true:true:",
             "[true, true, true, true, true, true, true, true, true, true, true, true, true]:true"
         )

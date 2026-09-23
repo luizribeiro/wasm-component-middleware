@@ -79,9 +79,6 @@ fn all_p3_imports_component(engine: &Engine) -> Component {
 #[test]
 fn only_later_interfaces_are_unrouted() {
     const ALLOWED_MISSING: &[&str] = &[
-        "wasi:random/insecure",
-        "wasi:random/insecure-seed",
-        "wasi:random/random",
         "wasi:sockets/instance-network",
         "wasi:sockets/ip-name-lookup",
         "wasi:sockets/network",
@@ -116,13 +113,7 @@ fn only_later_interfaces_are_unrouted() {
 
 #[test]
 fn only_ungated_p3_interfaces_are_unrouted() {
-    const ALLOWED_MISSING: &[&str] = &[
-        "wasi:random/insecure",
-        "wasi:random/insecure-seed",
-        "wasi:random/random",
-        "wasi:sockets/ip-name-lookup",
-        "wasi:sockets/types",
-    ];
+    const ALLOWED_MISSING: &[&str] = &["wasi:sockets/ip-name-lookup", "wasi:sockets/types"];
 
     let mut config = Config::new();
     config.wasm_component_model_async(true);

@@ -105,9 +105,17 @@ impl Guest for Component {
         let _ = wasi::cli::terminal_stdin::get_terminal_stdin();
         let _ = wasi::cli::terminal_stdout::get_terminal_stdout();
         let _ = wasi::cli::terminal_stderr::get_terminal_stderr();
+        let random_bytes = wasi::random::random::get_random_bytes(4);
+        let random_u64 = wasi::random::random::get_random_u64();
+        let insecure_bytes = wasi::random::insecure::get_insecure_random_bytes(4);
+        let insecure_u64 = wasi::random::insecure::get_insecure_random_u64();
+        let insecure_seed = wasi::random::insecure_seed::get_insecure_seed();
         let filesystem = exercise_filesystem().await;
 
-        format!("{}|{filesystem}", String::from_utf8(stdin).unwrap())
+        format!(
+            "{}|random={random_bytes:?}:{random_u64}|insecure={insecure_bytes:?}:{insecure_u64}:{insecure_seed:?}|{filesystem}",
+            String::from_utf8(stdin).unwrap()
+        )
     }
 
     async fn exit_success() {

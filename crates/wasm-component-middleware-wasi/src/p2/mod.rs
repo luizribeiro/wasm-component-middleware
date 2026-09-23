@@ -3,6 +3,7 @@ mod clocks;
 mod filesystem;
 mod gate;
 mod io;
+mod random;
 
 pub(super) const WASI_VERSION: &str = "0.2.12";
 
@@ -10,7 +11,6 @@ use wasm_component_middleware::MiddlewareView;
 use wasm_component_middleware::RoutedInterface;
 use wasmtime::component::Linker;
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi::random::WasiRandom;
 use wasmtime_wasi::sockets::{WasiSockets, WasiSocketsView as _};
 
 /// Interfaces routed by [`add_to_linker_sync`].
@@ -35,13 +35,16 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
     RoutedInterface::from_static("wasi:io/error"),
     RoutedInterface::from_static("wasi:io/poll"),
     RoutedInterface::from_static("wasi:io/streams"),
+    RoutedInterface::from_static("wasi:random/insecure"),
+    RoutedInterface::from_static("wasi:random/insecure-seed"),
+    RoutedInterface::from_static("wasi:random/random"),
 ];
 
 /// Adds synchronous WASI Preview 2 interfaces with middleware gates.
 ///
 /// This mirrors [`wasmtime_wasi::p2::add_to_linker_sync`], routing every
-/// `wasi:cli`, `wasi:clocks`, and `wasi:io` call through the store's
-/// [`MiddlewareView`].
+/// `wasi:cli`, `wasi:clocks`, `wasi:filesystem`, `wasi:io`, and `wasi:random`
+/// calls through the store's [`MiddlewareView`].
 ///
 /// # Errors
 ///
@@ -54,21 +57,17 @@ where
     cli::add_to_linker::<T>(linker)?;
     clocks::add_to_linker::<T>(linker)?;
     filesystem::add_to_linker::<T>(linker)?;
-    io::add_to_linker::<T>(linker)
+    io::add_to_linker::<T>(linker)?;
+    random::add_to_linker::<T>(linker)
 }
 
 fn add_ungated_to_linker_sync<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     T: WasiView + 'static,
 {
-    use wasmtime_wasi::p2::bindings::{random, sockets};
+    use wasmtime_wasi::p2::bindings::sockets;
 
     let options = wasmtime_wasi::p2::bindings::sync::LinkOptions::default();
-    random::random::add_to_linker::<T, WasiRandom>(linker, |state| state.ctx().ctx.random())?;
-    random::insecure::add_to_linker::<T, WasiRandom>(linker, |state| state.ctx().ctx.random())?;
-    random::insecure_seed::add_to_linker::<T, WasiRandom>(linker, |state| {
-        state.ctx().ctx.random()
-    })?;
     sockets::tcp_create_socket::add_to_linker::<T, WasiSockets>(linker, T::sockets)?;
     sockets::instance_network::add_to_linker::<T, WasiSockets>(linker, T::sockets)?;
     sockets::network::add_to_linker::<T, WasiSockets>(linker, &(&options).into(), T::sockets)?;

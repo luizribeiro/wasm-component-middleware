@@ -3,6 +3,7 @@
 mod cli;
 mod clocks;
 mod filesystem;
+mod random;
 mod relay;
 
 use wasm_component_middleware::{MiddlewareView, RoutedInterface};
@@ -58,13 +59,16 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
     RoutedInterface::from_static("wasi:clocks/system-clock"),
     RoutedInterface::from_static("wasi:filesystem/preopens"),
     RoutedInterface::from_static("wasi:filesystem/types"),
+    RoutedInterface::from_static("wasi:random/insecure"),
+    RoutedInterface::from_static("wasi:random/insecure-seed"),
+    RoutedInterface::from_static("wasi:random/random"),
 ];
 
 /// Adds WASI Preview 3 interfaces with middleware gates.
 ///
 /// This mirrors [`wasmtime_wasi::p3::add_to_linker`], routing every
-/// `wasi:cli`, `wasi:clocks`, and `wasi:filesystem` call through the store's
-/// [`MiddlewareView`].
+/// `wasi:cli`, `wasi:clocks`, `wasi:filesystem`, and `wasi:random` calls
+/// through the store's [`MiddlewareView`].
 /// Filesystem stream calls are gated, but their bytes pass through without
 /// relay or observation.
 /// Refusing filesystem `read-via-stream`, `write-via-stream`,
@@ -79,7 +83,7 @@ where
     T: WasiView + MiddlewareView + 'static,
 {
     filesystem::add_to_linker(linker)?;
-    wasmtime_wasi::p3::random::add_to_linker(linker)?;
+    random::add_to_linker(linker)?;
     wasmtime_wasi::p3::sockets::add_to_linker(linker)?;
     cli::add_to_linker(linker)?;
     clocks::add_to_linker(linker)
@@ -102,7 +106,7 @@ where
     T: WasiView + MiddlewareView + 'static,
 {
     filesystem::add_to_linker_relayed::<T, CAPACITY>(linker)?;
-    wasmtime_wasi::p3::random::add_to_linker(linker)?;
+    random::add_to_linker(linker)?;
     wasmtime_wasi::p3::sockets::add_to_linker(linker)?;
     cli::add_to_linker(linker)?;
     clocks::add_to_linker(linker)

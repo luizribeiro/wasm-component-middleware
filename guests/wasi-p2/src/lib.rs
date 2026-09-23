@@ -98,12 +98,17 @@ impl Guest for Component {
         let terminal_stdin = wasi::cli::terminal_stdin::get_terminal_stdin().is_some();
         let terminal_stdout = wasi::cli::terminal_stdout::get_terminal_stdout().is_some();
         let terminal_stderr = wasi::cli::terminal_stderr::get_terminal_stderr().is_some();
+        let random_bytes = wasi::random::random::get_random_bytes(4);
+        let random_u64 = wasi::random::random::get_random_u64();
+        let insecure_bytes = wasi::random::insecure::get_insecure_random_bytes(4);
+        let insecure_u64 = wasi::random::insecure::get_insecure_random_u64();
+        let insecure_seed = wasi::random::insecure_seed::insecure_seed();
         let filesystem = exercise_filesystem();
         drop(input_pollable);
         drop(output_pollable);
 
         format!(
-            "{environment:?}|{arguments:?}|{initial_cwd:?}|{}:{}|{}:{}|{instant}|{instant_resolution}|{instant_ready}|{clock_poll:?}|{read:?}|{blocking_read:?}|{skipped}|{blocking_skipped}|{input_ready}|{write_permit}|{output_ready}|{spliced}|{blocking_spliced}|{terminal_stdin}|{terminal_stdout}|{terminal_stderr}|{filesystem}",
+            "{environment:?}|{arguments:?}|{initial_cwd:?}|{}:{}|{}:{}|{instant}|{instant_resolution}|{instant_ready}|{clock_poll:?}|{read:?}|{blocking_read:?}|{skipped}|{blocking_skipped}|{input_ready}|{write_permit}|{output_ready}|{spliced}|{blocking_spliced}|{terminal_stdin}|{terminal_stdout}|{terminal_stderr}|random={random_bytes:?}:{random_u64}|insecure={insecure_bytes:?}:{insecure_u64}:{insecure_seed:?}|{filesystem}",
             wall.seconds, wall.nanoseconds, wall_resolution.seconds, wall_resolution.nanoseconds,
         )
     }

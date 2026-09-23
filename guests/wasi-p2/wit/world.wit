@@ -11,4 +11,5 @@ world workload {
   export churn-files: func();
   export rust-std-paths: func() -> u32;
   export quota-files: func() -> string;
+  export random-demo: func();
 }

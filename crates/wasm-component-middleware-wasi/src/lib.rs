@@ -2,3 +2,6 @@
 //!
 //! Use this crate when an embedder needs to select, observe, or restrict the
 //! WASI interfaces exposed to a component.
+
+/// Middleware gates for synchronous WASI Preview 2 interfaces.
+pub mod p2;

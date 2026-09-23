@@ -1536,6 +1536,7 @@ name = "wasm-component-middleware-wasi"
 version = "0.0.0"
 dependencies = [
  "wasm-component-middleware",
+ "wasmtime",
  "wasmtime-wasi",
 ]
 

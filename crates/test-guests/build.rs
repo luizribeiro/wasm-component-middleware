@@ -44,6 +44,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     emit_guest_path("HELLO_COMPONENT", &release_dir.join("hello.wasm"));
     emit_guest_path("SMOKE_P2_COMPONENT", &release_dir.join("smoke_p2.wasm"));
     emit_guest_path("SMOKE_P3_COMPONENT", &release_dir.join("smoke_p3.wasm"));
+    emit_guest_path(
+        "UNROUTED_IMPORT_COMPONENT",
+        &release_dir.join("unrouted_import.wasm"),
+    );
     println!(
         "cargo::rerun-if-changed={}",
         crate_dir.join("../../guests").display()

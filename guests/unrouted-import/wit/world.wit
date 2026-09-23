@@ -1,0 +1,11 @@
+package example:unrouted;
+
+interface host {
+  secret: func() -> string;
+  classified: func() -> string;
+}
+
+world unrouted-import {
+  import host;
+  export reveal: func() -> string;
+}

@@ -23,6 +23,12 @@ pub fn smoke_p3() -> &'static Path {
     Path::new(env!("SMOKE_P3_COMPONENT"))
 }
 
+/// Returns the path to the guest that imports a host interface left unrouted.
+#[must_use]
+pub fn unrouted_import() -> &'static Path {
+    Path::new(env!("UNROUTED_IMPORT_COMPONENT"))
+}
+
 #[cfg(test)]
 mod tests {
     use wasmtime::component::{Component, Linker, ResourceTable};
@@ -83,6 +89,13 @@ mod tests {
         let mut linker = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         Ok(linker)
+    }
+
+    #[test]
+    fn loads_unrouted_import_guest() -> Result<()> {
+        let engine = engine(false)?;
+        Component::from_file(&engine, super::unrouted_import())?;
+        Ok(())
     }
 
     #[tokio::test]

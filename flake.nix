@@ -34,11 +34,15 @@
           ];
           targets = [ "wasm32-wasip2" ];
         };
+        msrvToolchain = pkgs.rust-bin.stable."1.96.0".minimal.override {
+          targets = [ "wasm32-wasip2" ];
+        };
         cargoFiles = "(^|/)(Cargo\\.(toml|lock)|.*\\.rs)$";
         cargoHook =
           {
             name,
             text,
+            cargoToolchain ? toolchain,
             runtimeInputs ? [ ],
             files ? cargoFiles,
           }:
@@ -47,7 +51,7 @@
             entry = "${
               pkgs.writeShellApplication {
                 inherit name text;
-                runtimeInputs = [ toolchain ] ++ runtimeInputs;
+                runtimeInputs = [ cargoToolchain ] ++ runtimeInputs;
               }
             }/bin/${name}";
             inherit files;
@@ -95,6 +99,15 @@
               RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
             '';
           };
+          msrv =
+            (cargoHook {
+              name = "msrv-hook";
+              cargoToolchain = msrvToolchain;
+              text = "cargo check --workspace --all-targets --locked";
+            })
+            // {
+              stages = [ "pre-push" ];
+            };
         };
         offlineHooks = {
           nixfmt.enable = true;

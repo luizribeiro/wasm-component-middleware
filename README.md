@@ -110,6 +110,41 @@ filesystem `read-via-stream`, `write-via-stream`, `append-via-stream`, or
 `read-directory` traps because those Preview 3 calls have no top-level error
 result.
 
+## Streams
+
+Preview 3 moves file bytes through Component Model streams rather than host
+calls. The default `p3::add_to_linker` gates the call that opens each stream but
+leaves its bytes on Wasmtime's direct path. This also preserves Wasmtime's
+`try_into` short circuit for host-to-host streams.
+
+Use the opt-in relay when middleware must inspect or restrict every chunk:
+
+```rust
+use wasm_component_middleware_wasi::p3::{
+    StreamRelay, add_to_linker_with_stream_relay,
+};
+
+add_to_linker_with_stream_relay(&mut linker, StreamRelay::default())?;
+```
+
+The default queue bound is 64 KiB. A different nonzero bound can be selected
+with a const generic, for example `StreamRelay::<8192>::new()`. Relayed chunks
+appear as `[stream-read]read-via-stream`,
+`[stream-write]write-via-stream`, or
+`[stream-write]append-via-stream` calls. They reuse the opening call's id and
+descriptor handle; `args["bytes"]` exposes the complete chunk because relay
+data has already been copied. Ordinary gate argument snapshots retain the
+64-byte cap. Refusing a chunk leaves it unacknowledged, drains all
+previously approved chunks, and resolves the companion future as
+`error-code::access`, so the guest sees a recoverable filesystem error.
+The [`byte-budget` example](crates/wasm-component-middleware-wasi/examples/byte-budget.rs)
+uses this path to share a 100 KiB read allowance across stores.
+
+Relaying copies bytes through a bounded host queue. On the direct filesystem
+path this can reduce throughput by about 40%; the buffered path is usually much
+closer. The ignored `relay_throughput` test measures both paths over a 64 MiB
+file in a release build.
+
 ## Files
 
 Filesystem gates expose paths through `Call::args` and report every descriptor

@@ -1,6 +1,5 @@
 #![allow(missing_docs)]
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,8 +97,6 @@ fn only_later_interfaces_are_unrouted() {
 
 #[test]
 fn only_ungated_p3_interfaces_are_unrouted() {
-    const ALLOWED_MISSING: &[&str] = &["wasi:sockets/ip-name-lookup", "wasi:sockets/types"];
-
     let mut config = Config::new();
     config.wasm_component_model_async(true);
     config.concurrency_support(true);
@@ -107,7 +104,7 @@ fn only_ungated_p3_interfaces_are_unrouted() {
     let component = all_p3_imports_component(&engine);
     let mut linker = Linker::<State>::new(&engine);
     wasm_component_middleware_wasi::p3::add_to_linker(&mut linker).unwrap();
-    let error = verify_routing(
+    verify_routing(
         &engine,
         &component,
         wasm_component_middleware_wasi::p3::ROUTED_INTERFACES
@@ -115,15 +112,7 @@ fn only_ungated_p3_interfaces_are_unrouted() {
             .copied(),
         [],
     )
-    .unwrap_err();
-
-    let actual = error
-        .functions()
-        .iter()
-        .map(|function| function.split_once('@').unwrap().0)
-        .collect::<BTreeSet<_>>();
-    let expected = ALLOWED_MISSING.iter().copied().collect::<BTreeSet<_>>();
-    assert_eq!(actual, expected, "{error}");
+    .unwrap();
 }
 
 #[test]

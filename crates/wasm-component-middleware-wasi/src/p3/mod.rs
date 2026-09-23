@@ -5,6 +5,7 @@ mod clocks;
 mod filesystem;
 mod random;
 mod relay;
+mod sockets;
 
 use wasm_component_middleware::{MiddlewareView, RoutedInterface};
 use wasmtime::component::Linker;
@@ -62,6 +63,8 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
     RoutedInterface::from_static("wasi:random/insecure"),
     RoutedInterface::from_static("wasi:random/insecure-seed"),
     RoutedInterface::from_static("wasi:random/random"),
+    RoutedInterface::from_static("wasi:sockets/ip-name-lookup"),
+    RoutedInterface::from_static("wasi:sockets/types"),
 ];
 
 /// Adds WASI Preview 3 interfaces with middleware gates.
@@ -74,6 +77,9 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
 /// Refusing filesystem `read-via-stream`, `write-via-stream`,
 /// `append-via-stream`, or `read-directory` traps because Preview 3 gives
 /// those functions no top-level error result in which to return a refusal.
+/// Wasmtime produces accepted Preview 3 TCP sockets inside the stream returned
+/// by `tcp-socket.listen`, so layers see the `listen` call but not each accepted
+/// socket. Preview 2 `tcp-socket.accept` remains individually visible.
 ///
 /// # Errors
 ///
@@ -84,7 +90,7 @@ where
 {
     filesystem::add_to_linker(linker)?;
     random::add_to_linker(linker)?;
-    wasmtime_wasi::p3::sockets::add_to_linker(linker)?;
+    sockets::add_to_linker(linker)?;
     cli::add_to_linker(linker)?;
     clocks::add_to_linker(linker)
 }
@@ -94,6 +100,9 @@ where
 /// Each transferred chunk appears as a synthetic filesystem call carrying the
 /// opening call's identifier and descriptor handle. Use [`add_to_linker`] when
 /// byte-level policy is unnecessary and the direct Wasmtime path is preferred.
+/// Wasmtime produces accepted Preview 3 TCP sockets inside the stream returned
+/// by `tcp-socket.listen`, so layers see the `listen` call but not each accepted
+/// socket. Preview 2 `tcp-socket.accept` remains individually visible.
 ///
 /// # Errors
 ///
@@ -107,7 +116,7 @@ where
 {
     filesystem::add_to_linker_relayed::<T, CAPACITY>(linker)?;
     random::add_to_linker(linker)?;
-    wasmtime_wasi::p3::sockets::add_to_linker(linker)?;
+    sockets::add_to_linker_relayed::<T, CAPACITY>(linker)?;
     cli::add_to_linker(linker)?;
     clocks::add_to_linker(linker)
 }

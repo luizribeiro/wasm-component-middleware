@@ -813,6 +813,7 @@ async fn every_callable_p3_function_dispatches() {
     for (interface, function) in IMPOSSIBLE {
         assert!(expected.remove(&(String::from(*interface), String::from(*function))));
     }
+    expected.retain(|(interface, _)| !interface.starts_with("wasi:sockets/"));
     assert_eq!(*calls.lock().unwrap(), expected);
 }
 

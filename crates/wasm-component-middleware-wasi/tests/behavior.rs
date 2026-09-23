@@ -358,7 +358,11 @@ impl P3Harness {
             .insecure_random(Deterministic::new(vec![9, 10, 11, 12]))
             .insecure_random_seed(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff)
             .wall_clock(FixedWallClock)
-            .monotonic_clock(ProgrammableMonotonicClock(Arc::clone(&monotonic_now)));
+            .monotonic_clock(ProgrammableMonotonicClock(Arc::clone(&monotonic_now)))
+            .allow_tcp(true)
+            .allow_udp(true)
+            .allow_ip_name_lookup(true)
+            .socket_addr_check(|address, _| Box::pin(async move { address.ip().is_loopback() }));
         let directory = preopen_fixture(&mut builder);
         let mut store = Store::new(
             &engine,
@@ -441,6 +445,42 @@ impl P3Harness {
             .run_concurrent(async |accessor| self.guest.call_refused_open(accessor).await)
             .await??;
         Ok(refused)
+    }
+
+    async fn socket_denial(&mut self, port: u16) -> wasmtime::Result<bool> {
+        let refused = self
+            .store
+            .run_concurrent(async |accessor| self.guest.call_socket_denial(accessor, port).await)
+            .await??;
+        Ok(refused)
+    }
+
+    async fn tcp_bind_denial(&mut self) -> wasmtime::Result<bool> {
+        let refused = self
+            .store
+            .run_concurrent(async |accessor| self.guest.call_tcp_bind_denial(accessor).await)
+            .await??;
+        Ok(refused)
+    }
+
+    async fn udp_connect_denial(&mut self, port: u16) -> wasmtime::Result<bool> {
+        let refused = self
+            .store
+            .run_concurrent(async |accessor| {
+                self.guest.call_udp_connect_denial(accessor, port).await
+            })
+            .await??;
+        Ok(refused)
+    }
+
+    async fn tcp_send_denial(&mut self, port: u16, size: u64) -> wasmtime::Result<(u64, bool)> {
+        let result = self
+            .store
+            .run_concurrent(async |accessor| {
+                self.guest.call_tcp_send_denial(accessor, port, size).await
+            })
+            .await??;
+        Ok(result)
     }
 
     async fn stream_read(&mut self, path: &str, slow: bool) -> wasmtime::Result<String> {
@@ -626,7 +666,10 @@ impl Layer<State> for CaptureAddress {
     type Frame = ();
 
     fn before(&self, _state: &mut State, call: &Call<'_>) -> Result<(), Denied> {
-        if call.function == "[method]tcp-socket.start-connect" {
+        if matches!(
+            call.function,
+            "[method]tcp-socket.start-connect" | "[method]tcp-socket.connect"
+        ) {
             *self.0.lock().unwrap() = call
                 .args
                 .get("remote_address")
@@ -813,7 +856,6 @@ async fn every_callable_p3_function_dispatches() {
     for (interface, function) in IMPOSSIBLE {
         assert!(expected.remove(&(String::from(*interface), String::from(*function))));
     }
-    expected.retain(|(interface, _)| !interface.starts_with("wasi:sockets/"));
     assert_eq!(*calls.lock().unwrap(), expected);
 }
 
@@ -946,6 +988,47 @@ async fn refusing_p3_open_is_a_guest_visible_access_error() {
     .unwrap();
 
     assert!(harness.refused_open().await.unwrap());
+}
+
+#[tokio::test]
+async fn refusing_p3_tcp_connect_returns_access_and_exposes_the_address() {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let address = Arc::new(Mutex::new(None));
+    let chain = Chain::builder()
+        .layer(CaptureAddress(Arc::clone(&address)))
+        .layer(Refuse("[method]tcp-socket.connect"))
+        .build();
+    let mut harness = P3Harness::new(true, chain).await.unwrap();
+
+    assert!(harness.socket_denial(port).await.unwrap());
+    assert_eq!(
+        address.lock().unwrap().as_deref(),
+        Some(format!("127.0.0.1:{port}").as_str())
+    );
+}
+
+#[tokio::test]
+async fn refusing_borrowed_p3_socket_calls_returns_access() {
+    let mut tcp = P3Harness::new(
+        true,
+        Chain::builder()
+            .layer(Refuse("[method]tcp-socket.bind"))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(tcp.tcp_bind_denial().await.unwrap());
+
+    let mut udp = P3Harness::new(
+        true,
+        Chain::builder()
+            .layer(Refuse("[method]udp-socket.connect"))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(udp.udp_connect_denial(7).await.unwrap());
 }
 
 #[test]
@@ -1101,16 +1184,20 @@ async fn p3_streams_and_clock_waits_retain_their_distinct_semantics() {
     gated.set_monotonic_now(10_000_000_000);
     let gated_stdin = gated.exercise().await.unwrap();
 
-    assert_eq!(
-        plain_stdin,
-        concat!(
+    assert!(
+        plain_stdin.starts_with(concat!(
             "p3 input|random=[4, 4, 4, 4]:72623859723010820|",
             "insecure=[12, 12, 12, 12]:651345242427624204:",
             "(9843086184167632639, 4822678189205111)|",
             "16:16:true:alpha:DescriptorFlags(READ | WRITE):",
             "DescriptorType::RegularFile:true:true:",
             "[true, true, true, true, true, true, true, true, true, true, true, true, true]:true"
-        )
+        )),
+        "{plain_stdin}"
+    );
+    assert!(
+        plain_stdin.contains("|sockets=true:IpAddressFamily::Ipv4:true:true:"),
+        "{plain_stdin}"
     );
     assert_eq!(gated_stdin, plain_stdin);
     assert_eq!(plain.stdout.contents().as_ref(), b"p3 stdout");
@@ -1133,6 +1220,109 @@ struct StreamCall {
 struct StreamTrace {
     openings: Vec<StreamCall>,
     chunks: Vec<StreamCall>,
+}
+
+#[derive(Clone, Default)]
+struct SocketStreamTrace(SocketStreamCalls);
+
+type SocketStreamCalls = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
+impl Layer<State> for SocketStreamTrace {
+    type Frame = ();
+
+    fn before(&self, _state: &mut State, call: &Call<'_>) -> Result<(), Denied> {
+        if call.interface == Some("wasi:sockets/types") && call.function.starts_with("[stream-") {
+            let bytes = call
+                .args
+                .get("bytes")
+                .and_then(ArgumentValue::as_bytes)
+                .unwrap()
+                .to_vec();
+            self.0
+                .lock()
+                .unwrap()
+                .push((call.function.to_owned(), bytes));
+        }
+        Ok(())
+    }
+
+    fn after(&self, _state: &mut State, _call: &Call<'_>, (): (), _outcome: Outcome<'_>) {}
+}
+
+#[tokio::test]
+async fn p3_tcp_stream_relay_exposes_bytes_in_both_directions() {
+    let trace = SocketStreamTrace::default();
+    let mut harness = P3Harness::new_relayed(Chain::builder().layer(trace.clone()).build())
+        .await
+        .unwrap();
+
+    harness.exercise().await.unwrap();
+
+    let calls = trace.0.lock().unwrap();
+    assert_eq!(calls.len(), 4, "{calls:?}");
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(function, _)| function == "[stream-write]tcp-socket.send")
+            .count(),
+        2
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(function, _)| function == "[stream-read]tcp-socket.receive")
+            .count(),
+        2
+    );
+    assert!(calls.iter().all(|(_, bytes)| bytes == b"hello"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn p3_tcp_send_denial_drains_every_acknowledged_byte() {
+    const SIZE: usize = 4 * 1024 * 1024;
+
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = std::thread::spawn(move || {
+        use std::io::Read as _;
+
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let chain = Chain::builder()
+        .layer(Budget::new(100 * 1024, |call: &Call<'_>| {
+            (call.function == "[stream-write]tcp-socket.send")
+                .then(|| {
+                    call.args
+                        .get("bytes")
+                        .and_then(ArgumentValue::byte_len)
+                        .map(|bytes| ((), u64::try_from(bytes).unwrap()))
+                })
+                .flatten()
+        }))
+        .build();
+    let mut harness = P3Harness::new_relayed(chain).await.unwrap();
+
+    let (acknowledged, denied) = tokio::time::timeout(
+        Duration::from_secs(10),
+        harness.tcp_send_denial(port, u64::try_from(SIZE).unwrap()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    drop(harness);
+    let peer_bytes = peer.join().unwrap();
+    let acknowledged = usize::try_from(acknowledged).unwrap();
+
+    assert!(denied);
+    assert!(acknowledged > 0 && acknowledged < SIZE);
+    assert_eq!(peer_bytes.len(), acknowledged);
+    assert_eq!(peer_bytes, stream_data(acknowledged));
 }
 
 #[derive(Clone)]

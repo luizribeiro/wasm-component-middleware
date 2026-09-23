@@ -111,9 +111,10 @@ impl Guest for Component {
         let insecure_u64 = wasi::random::insecure::get_insecure_random_u64();
         let insecure_seed = wasi::random::insecure_seed::get_insecure_seed();
         let filesystem = exercise_filesystem().await;
+        let sockets = exercise_sockets().await;
 
         format!(
-            "{}|random={random_bytes:?}:{random_u64}|insecure={insecure_bytes:?}:{insecure_u64}:{insecure_seed:?}|{filesystem}",
+            "{}|random={random_bytes:?}:{random_u64}|insecure={insecure_bytes:?}:{insecure_u64}:{insecure_seed:?}|{filesystem}|{sockets}",
             String::from_utf8(stdin).unwrap()
         )
     }
@@ -289,6 +290,109 @@ impl Guest for Component {
         drop(writer);
         drop(completion);
     }
+
+    async fn socket_denial(port: u16) -> bool {
+        use wasi::sockets::types::{
+            ErrorCode, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress,
+        };
+
+        let socket = wasi::sockets::types::TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+        matches!(
+            socket
+                .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                    address: (127, 0, 0, 1),
+                    port,
+                }))
+                .await,
+            Err(ErrorCode::AccessDenied)
+        )
+    }
+
+    async fn tcp_bind_denial() -> bool {
+        use wasi::sockets::types::{
+            ErrorCode, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket,
+        };
+
+        let socket = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+        matches!(
+            socket.bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port: 0,
+            })),
+            Err(ErrorCode::AccessDenied)
+        )
+    }
+
+    async fn udp_connect_denial(port: u16) -> bool {
+        use wasi::sockets::types::{
+            ErrorCode, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket,
+        };
+
+        let socket = UdpSocket::create(IpAddressFamily::Ipv4).unwrap();
+        socket
+            .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port: 0,
+            }))
+            .unwrap();
+        matches!(
+            socket.connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port,
+            })),
+            Err(ErrorCode::AccessDenied)
+        )
+    }
+
+    async fn tcp_send_denial(port: u16, size: u64) -> (u64, bool) {
+        use wasi::sockets::types::{
+            ErrorCode, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket,
+        };
+
+        let socket = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+        socket
+            .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port: 0,
+            }))
+            .unwrap();
+        socket
+            .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port,
+            }))
+            .await
+            .unwrap();
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let completion = socket.send(reader);
+        let remaining = writer.write_all(generated_bytes(size)).await;
+        let acknowledged = size - u64::try_from(remaining.len()).unwrap();
+        drop(writer);
+        let denied = matches!(completion.await, Err(ErrorCode::AccessDenied));
+        (acknowledged, denied)
+    }
+
+    async fn net_allowlist(allowed_port: u16, denied_port: u16) -> String {
+        let address = resolve_localhost().await;
+        let allowed = connect_and_echo(address, allowed_port)
+            .await
+            .unwrap_or_else(socket_error);
+        let denied = connect_and_echo(address, denied_port)
+            .await
+            .unwrap_or_else(socket_error);
+        let udp_allowed = send_datagram(address, allowed_port)
+            .await
+            .map_or_else(socket_error, |()| "delivered".to_owned());
+        let udp_denied = send_datagram(address, denied_port)
+            .await
+            .map_or_else(socket_error, |()| "delivered".to_owned());
+        let udp_connected_denied = send_connected_datagram(address, denied_port)
+            .await
+            .map_or_else(socket_error, |()| "delivered".to_owned());
+        format!(
+            "allowed: {allowed}\ndenied: {denied}\nudp allowed: {udp_allowed}\nudp denied: {udp_denied}\nudp connected denied: {udp_connected_denied}\n"
+        )
+    }
 }
 
 export!(Component);
@@ -303,6 +407,235 @@ fn checksum(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |checksum, byte| {
         (checksum ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
     })
+}
+
+async fn read_stream(mut stream: wit_bindgen::rt::async_support::StreamReader<u8>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    loop {
+        let (status, chunk) = stream.read(Vec::with_capacity(64)).await;
+        bytes.extend(chunk);
+        if matches!(
+            status,
+            wit_bindgen::rt::async_support::StreamResult::Dropped
+        ) {
+            return bytes;
+        }
+    }
+}
+
+async fn send_stream(socket: &wasi::sockets::types::TcpSocket, bytes: &[u8]) {
+    let (mut writer, reader) = wit_stream::new::<u8>();
+    let completion = socket.send(reader);
+    assert!(writer.write_all(bytes.to_vec()).await.is_empty());
+    drop(writer);
+    completion.await.unwrap();
+}
+
+async fn exercise_sockets() -> String {
+    use wasi::sockets::types::{
+        IpAddress, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket, UdpSocket,
+    };
+
+    let listener = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    listener.set_listen_backlog_size(4).unwrap();
+    listener
+        .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+            address: (127, 0, 0, 1),
+            port: 0,
+        }))
+        .unwrap();
+    let local = listener.get_local_address().unwrap();
+    let mut incoming = listener.listen().unwrap();
+    let listening = listener.get_is_listening();
+    let tcp_family = listener.get_address_family();
+
+    let client = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    let tcp_options = exercise_tcp_options(&client);
+    client
+        .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+            address: (127, 0, 0, 1),
+            port: 0,
+        }))
+        .unwrap();
+    client.connect(local).await.unwrap();
+    let (_, mut accepted) = incoming.read(Vec::with_capacity(1)).await;
+    let accepted = accepted.remove(0);
+    let remote_matches = same_address(client.get_remote_address().unwrap(), local);
+    let accepted_local = same_address(accepted.get_local_address().unwrap(), local);
+    let _ = accepted.get_remote_address().unwrap();
+
+    let (server_input, server_completion) = accepted.receive();
+    send_stream(&client, b"hello").await;
+    let received = read_stream(server_input).await;
+    server_completion.await.unwrap();
+    let (client_input, client_completion) = client.receive();
+    send_stream(&accepted, &received).await;
+    let echoed = read_stream(client_input).await;
+    client_completion.await.unwrap();
+
+    let udp_server = UdpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    udp_server
+        .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+            address: (127, 0, 0, 1),
+            port: 0,
+        }))
+        .unwrap();
+    let udp_address = udp_server.get_local_address().unwrap();
+    let udp_options = exercise_udp_options(&udp_server);
+    let udp_client = UdpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    udp_client
+        .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+            address: (127, 0, 0, 1),
+            port: 0,
+        }))
+        .unwrap();
+    udp_client.connect(udp_address).unwrap();
+    let udp_remote = same_address(udp_client.get_remote_address().unwrap(), udp_address);
+    udp_client.send(b"udp".to_vec(), None).await.unwrap();
+    let (datagram, _) = udp_server.receive().await.unwrap();
+    udp_client.disconnect().unwrap();
+
+    let resolved = wasi::sockets::ip_name_lookup::resolve_addresses("localhost".to_owned())
+        .await
+        .unwrap();
+    format!(
+        "sockets={listening}:{tcp_family:?}:{remote_matches}:{accepted_local}:{tcp_options:?}:{}:{udp_options:?}:{udp_remote}:{}:{}",
+        String::from_utf8_lossy(&echoed),
+        String::from_utf8_lossy(&datagram),
+        resolved
+            .into_iter()
+            .any(|address| matches!(address, IpAddress::Ipv4(_) | IpAddress::Ipv6(_))),
+    )
+}
+
+fn exercise_tcp_options(
+    socket: &wasi::sockets::types::TcpSocket,
+) -> (bool, u64, u64, u32, u8, u64, u64) {
+    socket.set_keep_alive_enabled(true).unwrap();
+    socket.set_keep_alive_idle_time(13_000_000_000).unwrap();
+    socket.set_keep_alive_interval(7_000_000_000).unwrap();
+    socket.set_keep_alive_count(5).unwrap();
+    socket.set_hop_limit(42).unwrap();
+    socket.set_receive_buffer_size(8_192).unwrap();
+    socket.set_send_buffer_size(32_768).unwrap();
+    (
+        socket.get_keep_alive_enabled().unwrap(),
+        socket.get_keep_alive_idle_time().unwrap(),
+        socket.get_keep_alive_interval().unwrap(),
+        socket.get_keep_alive_count().unwrap(),
+        socket.get_hop_limit().unwrap(),
+        socket.get_receive_buffer_size().unwrap(),
+        socket.get_send_buffer_size().unwrap(),
+    )
+}
+
+fn exercise_udp_options(socket: &wasi::sockets::types::UdpSocket) -> (u8, u64, u64, bool) {
+    let family = socket.get_address_family();
+    socket.set_unicast_hop_limit(37).unwrap();
+    socket.set_receive_buffer_size(8_192).unwrap();
+    socket.set_send_buffer_size(32_768).unwrap();
+    (
+        socket.get_unicast_hop_limit().unwrap(),
+        socket.get_receive_buffer_size().unwrap(),
+        socket.get_send_buffer_size().unwrap(),
+        matches!(family, wasi::sockets::types::IpAddressFamily::Ipv4),
+    )
+}
+
+fn same_address(
+    left: wasi::sockets::types::IpSocketAddress,
+    right: wasi::sockets::types::IpSocketAddress,
+) -> bool {
+    use wasi::sockets::types::IpSocketAddress;
+
+    match (left, right) {
+        (IpSocketAddress::Ipv4(left), IpSocketAddress::Ipv4(right)) => {
+            left.address == right.address && left.port == right.port
+        }
+        (IpSocketAddress::Ipv6(left), IpSocketAddress::Ipv6(right)) => {
+            left.address == right.address
+                && left.port == right.port
+                && left.flow_info == right.flow_info
+                && left.scope_id == right.scope_id
+        }
+        _ => false,
+    }
+}
+
+async fn resolve_localhost() -> wasi::sockets::types::Ipv4Address {
+    use wasi::sockets::types::IpAddress;
+
+    wasi::sockets::ip_name_lookup::resolve_addresses("localhost".to_owned())
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|address| match address {
+            IpAddress::Ipv4(address) => Some(address),
+            IpAddress::Ipv6(_) => None,
+        })
+        .unwrap()
+}
+
+async fn connect_and_echo(
+    address: wasi::sockets::types::Ipv4Address,
+    port: u16,
+) -> Result<String, wasi::sockets::types::ErrorCode> {
+    use wasi::sockets::types::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket};
+
+    let socket = TcpSocket::create(IpAddressFamily::Ipv4)?;
+    socket.bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+        address: (127, 0, 0, 1),
+        port: 0,
+    }))?;
+    socket
+        .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress { address, port }))
+        .await?;
+    let (input, completion) = socket.receive();
+    send_stream(&socket, b"hello").await;
+    let echo = read_stream(input).await;
+    completion.await?;
+    Ok(String::from_utf8_lossy(&echo).into_owned())
+}
+
+async fn send_datagram(
+    address: wasi::sockets::types::Ipv4Address,
+    port: u16,
+) -> Result<(), wasi::sockets::types::ErrorCode> {
+    use wasi::sockets::types::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket};
+
+    let socket = UdpSocket::create(IpAddressFamily::Ipv4)?;
+    socket.bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+        address: (127, 0, 0, 1),
+        port: 0,
+    }))?;
+    socket
+        .send(
+            b"udp".to_vec(),
+            Some(IpSocketAddress::Ipv4(Ipv4SocketAddress { address, port })),
+        )
+        .await
+}
+
+async fn send_connected_datagram(
+    address: wasi::sockets::types::Ipv4Address,
+    port: u16,
+) -> Result<(), wasi::sockets::types::ErrorCode> {
+    use wasi::sockets::types::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket};
+
+    let socket = UdpSocket::create(IpAddressFamily::Ipv4)?;
+    socket.bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+        address: (127, 0, 0, 1),
+        port: 0,
+    }))?;
+    socket.connect(IpSocketAddress::Ipv4(Ipv4SocketAddress { address, port }))?;
+    socket.send(b"udp".to_vec(), None).await
+}
+
+fn socket_error(error: wasi::sockets::types::ErrorCode) -> String {
+    match error {
+        wasi::sockets::types::ErrorCode::AccessDenied => "access-denied".to_owned(),
+        error => format!("{error:?}").to_ascii_lowercase(),
+    }
 }
 
 async fn exercise_filesystem() -> String {

@@ -16,6 +16,8 @@ world workload {
   import wasi:random/random@0.3.0;
   import wasi:random/insecure@0.3.0;
   import wasi:random/insecure-seed@0.3.0;
+  import wasi:sockets/types@0.3.0;
+  import wasi:sockets/ip-name-lookup@0.3.0;
 
   export basic-system: async func();
   export common-calls: async func();
@@ -30,4 +32,9 @@ world workload {
   export stream-write-tolerant: async func(path: string, size: u64) -> string;
   export cancel-stream-read: async func(path: string);
   export cancel-stream-write: async func(path: string);
+  export socket-denial: async func(port: u16) -> bool;
+  export tcp-bind-denial: async func() -> bool;
+  export udp-connect-denial: async func(port: u16) -> bool;
+  export tcp-send-denial: async func(port: u16, size: u64) -> tuple<u64, bool>;
+  export net-allowlist: async func(allowed-port: u16, denied-port: u16) -> string;
 }

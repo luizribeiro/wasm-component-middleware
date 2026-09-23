@@ -1,4 +1,6 @@
-pub(super) use crate::gate::{Gate, GateData, gate, project};
+pub(super) use crate::gate::{
+    Gate, GateData, gate, produced_directories, produced_resource, project,
+};
 
 #[cfg(test)]
 mod tests {

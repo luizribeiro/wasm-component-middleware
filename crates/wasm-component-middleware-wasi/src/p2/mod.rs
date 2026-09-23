@@ -1,5 +1,6 @@
 mod cli;
 mod clocks;
+mod filesystem;
 mod gate;
 mod io;
 
@@ -9,7 +10,6 @@ use wasm_component_middleware::MiddlewareView;
 use wasm_component_middleware::RoutedInterface;
 use wasmtime::component::Linker;
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi::filesystem::{WasiFilesystem, WasiFilesystemView as _};
 use wasmtime_wasi::random::WasiRandom;
 use wasmtime_wasi::sockets::{WasiSockets, WasiSocketsView as _};
 
@@ -51,6 +51,7 @@ where
     add_ungated_to_linker_sync(linker)?;
     cli::add_to_linker::<T>(linker)?;
     clocks::add_to_linker::<T>(linker)?;
+    filesystem::add_to_linker::<T>(linker)?;
     io::add_to_linker::<T>(linker)
 }
 
@@ -58,10 +59,9 @@ fn add_ungated_to_linker_sync<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     T: WasiView + 'static,
 {
-    use wasmtime_wasi::p2::bindings::{filesystem, random, sockets};
+    use wasmtime_wasi::p2::bindings::{random, sockets};
 
     let options = wasmtime_wasi::p2::bindings::sync::LinkOptions::default();
-    filesystem::preopens::add_to_linker::<T, WasiFilesystem>(linker, T::filesystem)?;
     random::random::add_to_linker::<T, WasiRandom>(linker, |state| state.ctx().ctx.random())?;
     random::insecure::add_to_linker::<T, WasiRandom>(linker, |state| state.ctx().ctx.random())?;
     random::insecure_seed::add_to_linker::<T, WasiRandom>(linker, |state| {
@@ -70,10 +70,6 @@ where
     sockets::tcp_create_socket::add_to_linker::<T, WasiSockets>(linker, T::sockets)?;
     sockets::instance_network::add_to_linker::<T, WasiSockets>(linker, T::sockets)?;
     sockets::network::add_to_linker::<T, WasiSockets>(linker, &(&options).into(), T::sockets)?;
-    wasmtime_wasi::p2::bindings::sync::filesystem::types::add_to_linker::<T, WasiFilesystem>(
-        linker,
-        T::filesystem,
-    )?;
     wasmtime_wasi::p2::bindings::sync::sockets::tcp::add_to_linker::<T, WasiSockets>(
         linker,
         T::sockets,

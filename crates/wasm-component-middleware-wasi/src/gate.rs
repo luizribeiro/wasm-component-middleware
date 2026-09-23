@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use wasmtime::component::HasData;
+use wasmtime::component::{HasData, Resource};
 
 pub(crate) struct Gate<'a, T> {
     pub(crate) state: &'a mut T,
@@ -16,7 +16,43 @@ impl<T: 'static> HasData for GateData<T> {
     type Data<'a> = Gate<'a, T>;
 }
 
+pub(crate) fn produced_resource<T>(resource: &Resource<T>) -> Vec<u32>
+where
+    T: 'static,
+{
+    vec![resource.rep()]
+}
+
+pub(crate) fn produced_directories<T>(directories: &[(Resource<T>, String)]) -> Vec<u32>
+where
+    T: 'static,
+{
+    directories
+        .iter()
+        .map(|(descriptor, _)| descriptor.rep())
+        .collect()
+}
+
 macro_rules! gate {
+    (
+        filesystem $gate:ident, $version:expr, $interface:literal, $function:literal,
+        handles = [$($handle:expr),* $(,)?], args = $args:tt,
+        delegate = $delegate:expr, denied = $denied:expr, wrapper = $wrapper:ty
+        $(, produced = $produced:expr)?
+    ) => {{
+        let result = gate!(
+            trap $gate, $version, $interface, $function,
+            handles = [$($handle),*], args = $args,
+            delegate = $delegate $(, produced = $produced)?
+        );
+        result.map_err(|error| match error.downcast::<wasm_component_middleware::Denied>() {
+            Ok(_) => $denied,
+            Err(error) => match error.downcast::<$wrapper>() {
+                Ok(error) => error,
+                Err(error) => <$wrapper>::trap(error),
+            },
+        })
+    }};
     (
         trap $gate:ident, $version:expr, $interface:literal, $function:literal,
         handles = [$($handle:expr),* $(,)?], args = $args:tt,

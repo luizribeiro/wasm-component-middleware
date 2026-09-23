@@ -373,22 +373,32 @@ impl Guest for Component {
     }
 
     async fn net_allowlist(allowed_port: u16, denied_port: u16) -> String {
-        let address = resolve_localhost().await;
-        let allowed = connect_and_echo(address, allowed_port)
+        use wasi::sockets::types::ErrorCode;
+
+        let address = with_socket_timeout(resolve_localhost())
             .await
+            .expect("localhost resolution timed out");
+        let allowed = with_socket_timeout(connect_and_echo(address, allowed_port))
+            .await
+            .unwrap_or(Err(ErrorCode::Timeout))
             .unwrap_or_else(socket_error);
-        let denied = connect_and_echo(address, denied_port)
+        let denied = with_socket_timeout(connect_and_echo(address, denied_port))
             .await
+            .unwrap_or(Err(ErrorCode::Timeout))
             .unwrap_or_else(socket_error);
-        let udp_allowed = send_datagram(address, allowed_port)
+        let udp_allowed = with_socket_timeout(send_datagram(address, allowed_port))
             .await
+            .unwrap_or(Err(ErrorCode::Timeout))
             .map_or_else(socket_error, |()| "delivered".to_owned());
-        let udp_denied = send_datagram(address, denied_port)
+        let udp_denied = with_socket_timeout(send_datagram(address, denied_port))
             .await
+            .unwrap_or(Err(ErrorCode::Timeout))
             .map_or_else(socket_error, |()| "delivered".to_owned());
-        let udp_connected_denied = send_connected_datagram(address, denied_port)
-            .await
-            .map_or_else(socket_error, |()| "delivered".to_owned());
+        let udp_connected_denied =
+            with_socket_timeout(send_connected_datagram(address, denied_port))
+                .await
+                .unwrap_or(Err(ErrorCode::Timeout))
+                .map_or_else(socket_error, |()| "delivered".to_owned());
         format!(
             "allowed: {allowed}\ndenied: {denied}\nudp allowed: {udp_allowed}\nudp denied: {udp_denied}\nudp connected denied: {udp_connected_denied}\n"
         )
@@ -560,6 +570,21 @@ fn same_address(
         }
         _ => false,
     }
+}
+
+async fn with_socket_timeout<F: Future>(future: F) -> Option<F::Output> {
+    let mut future = Box::pin(future);
+    let mut timeout = Box::pin(wasi::clocks::monotonic_clock::wait_for(10_000_000_000));
+    poll_fn(|context| {
+        if let Poll::Ready(value) = future.as_mut().poll(context) {
+            return Poll::Ready(Some(value));
+        }
+        if timeout.as_mut().poll(context).is_ready() {
+            return Poll::Ready(None);
+        }
+        Poll::Pending
+    })
+    .await
 }
 
 async fn resolve_localhost() -> wasi::sockets::types::Ipv4Address {

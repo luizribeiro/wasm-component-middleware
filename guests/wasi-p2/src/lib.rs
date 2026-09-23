@@ -585,10 +585,17 @@ fn resolve_localhost(
             Ok(Some(IpAddress::Ipv4(address))) => return address,
             Ok(Some(IpAddress::Ipv6(_))) => {}
             Ok(None) => panic!("localhost did not resolve to IPv4"),
-            Err(ErrorCode::WouldBlock) => ready.block(),
+            Err(ErrorCode::WouldBlock) => {
+                assert!(wait_before_socket_timeout(&ready), "DNS lookup timed out");
+            }
             Err(error) => panic!("localhost resolution failed: {error:?}"),
         }
     }
+}
+
+fn wait_before_socket_timeout(pollable: &wasi::io::poll::Pollable) -> bool {
+    let timeout = wasi::clocks::monotonic_clock::subscribe_duration(10_000_000_000);
+    wasi::io::poll::poll(&[pollable, &timeout]).contains(&0)
 }
 
 fn connect_and_echo(
@@ -611,10 +618,27 @@ fn connect_and_echo(
         network,
         IpSocketAddress::Ipv4(Ipv4SocketAddress { address, port }),
     )?;
-    socket.subscribe().block();
+    let connected = socket.subscribe();
+    if !wait_before_socket_timeout(&connected) {
+        return Err(wasi::sockets::network::ErrorCode::Timeout);
+    }
     let (input, output) = finish_connect(&socket);
-    output.blocking_write_and_flush(b"hello").unwrap();
-    let echo = input.blocking_read(5).unwrap();
+    let writable = output.subscribe();
+    while output.check_write().unwrap() < 5 {
+        if !wait_before_socket_timeout(&writable) {
+            return Err(wasi::sockets::network::ErrorCode::Timeout);
+        }
+    }
+    output.write(b"hello").unwrap();
+    output.flush().unwrap();
+    if !wait_before_socket_timeout(&writable) {
+        return Err(wasi::sockets::network::ErrorCode::Timeout);
+    }
+    let readable = input.subscribe();
+    if !wait_before_socket_timeout(&readable) {
+        return Err(wasi::sockets::network::ErrorCode::Timeout);
+    }
+    let echo = input.read(5).unwrap();
     Ok(String::from_utf8_lossy(&echo).into_owned())
 }
 
@@ -638,7 +662,9 @@ fn send_datagram(
     let (_, outgoing) = socket.stream(None)?;
     let ready = outgoing.subscribe();
     while outgoing.check_send()? == 0 {
-        ready.block();
+        if !wait_before_socket_timeout(&ready) {
+            return Err(wasi::sockets::network::ErrorCode::Timeout);
+        }
     }
     outgoing.send(&[OutgoingDatagram {
         data: b"udp".to_vec(),

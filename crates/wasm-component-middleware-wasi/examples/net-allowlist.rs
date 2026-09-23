@@ -138,8 +138,19 @@ fn listener() -> std::io::Result<TcpListener> {
 struct Servers {
     allowed_address: SocketAddr,
     denied_address: SocketAddr,
+    allowed: TcpListener,
+    denied: TcpListener,
+    allowed_udp: UdpSocket,
+    denied_udp: UdpSocket,
+}
+
+struct RunningServers {
+    allowed_address: SocketAddr,
+    denied_address: SocketAddr,
     echo: thread::JoinHandle<std::io::Result<()>>,
     receive_datagram: thread::JoinHandle<std::io::Result<()>>,
+    _denied: TcpListener,
+    _denied_udp: UdpSocket,
 }
 
 impl Servers {
@@ -149,31 +160,65 @@ impl Servers {
         let allowed_address = allowed.local_addr()?;
         let denied_address = denied.local_addr()?;
         let allowed_udp = UdpSocket::bind(allowed_address)?;
-        let _denied_udp = UdpSocket::bind(denied_address)?;
-        allowed_udp.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let denied_udp = UdpSocket::bind(denied_address)?;
+        Ok(Self {
+            allowed_address,
+            denied_address,
+            allowed,
+            denied,
+            allowed_udp,
+            denied_udp,
+        })
+    }
+
+    fn run(self) -> std::io::Result<RunningServers> {
+        self.allowed.set_nonblocking(true)?;
+        self.allowed_udp
+            .set_read_timeout(Some(Duration::from_secs(10)))?;
         let echo = thread::spawn(move || -> std::io::Result<()> {
-            let (mut stream, _) = allowed.accept()?;
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let (mut stream, _) = loop {
+                match self.allowed.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "TCP client did not connect",
+                            ));
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+            stream.set_write_timeout(Some(Duration::from_secs(10)))?;
             let mut message = [0; 5];
             stream.read_exact(&mut message)?;
             stream.write_all(&message)
         });
         let receive_datagram = thread::spawn(move || -> std::io::Result<()> {
             let mut message = [0; 3];
-            let received = allowed_udp.recv(&mut message)?;
+            let received = self.allowed_udp.recv(&mut message)?;
             if received == message.len() && message == *b"udp" {
                 Ok(())
             } else {
                 Err(std::io::Error::other("unexpected UDP datagram"))
             }
         });
-        Ok(Self {
-            allowed_address,
-            denied_address,
+        Ok(RunningServers {
+            allowed_address: self.allowed_address,
+            denied_address: self.denied_address,
             echo,
             receive_datagram,
+            _denied: self.denied,
+            _denied_udp: self.denied_udp,
         })
     }
+}
 
+impl RunningServers {
     fn finish(self) -> wasmtime::Result<()> {
         self.echo
             .join()
@@ -215,6 +260,7 @@ fn run_p2(servers: Servers) -> wasmtime::Result<String> {
         },
     );
     let guest = Workload::instantiate(&mut store, &component, &linker)?;
+    let servers = servers.run()?;
     let output = guest.call_net_allowlist(
         &mut store,
         servers.allowed_address.port(),
@@ -249,6 +295,7 @@ async fn run_p3(servers: Servers) -> wasmtime::Result<String> {
         },
     );
     let guest = p3::Workload::instantiate_async(&mut store, &component, &linker).await?;
+    let servers = servers.run()?;
     let output = store
         .run_concurrent(async |accessor| {
             guest

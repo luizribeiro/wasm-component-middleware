@@ -13,7 +13,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use tokio::io::{AsyncRead, AsyncWrite};
 use wasm_component_middleware::{
-    Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView, Outcome,
+    ArgumentValue, Budget, Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx,
+    MiddlewareView, Outcome,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
@@ -290,7 +291,7 @@ struct P3Harness {
     stdout: MemoryOutputPipe,
     stderr: MemoryOutputPipe,
     monotonic_now: Arc<AtomicU64>,
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
 }
 
 fn preopen_fixture(builder: &mut WasiCtxBuilder) -> tempfile::TempDir {
@@ -306,6 +307,19 @@ fn preopen_fixture(builder: &mut WasiCtxBuilder) -> tempfile::TempDir {
 
 impl P3Harness {
     async fn new(gated: bool, chain: Arc<Chain<State>>) -> wasmtime::Result<Self> {
+        Self::new_with_linking(gated, false, false, chain).await
+    }
+
+    async fn new_relayed(chain: Arc<Chain<State>>) -> wasmtime::Result<Self> {
+        Self::new_with_linking(true, true, false, chain).await
+    }
+
+    async fn new_with_linking(
+        gated: bool,
+        relayed: bool,
+        blocking: bool,
+        chain: Arc<Chain<State>>,
+    ) -> wasmtime::Result<Self> {
         let mut config = Config::new();
         config.wasm_component_model_async(true);
         config.concurrency_support(true);
@@ -313,7 +327,12 @@ impl P3Harness {
         let component = Component::from_file(&engine, test_guests::wasi_p3())?;
         let mut linker = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
-        if gated {
+        if relayed {
+            wasm_component_middleware_wasi::p3::add_to_linker_with_stream_relay(
+                &mut linker,
+                wasm_component_middleware_wasi::p3::StreamRelay::default(),
+            )?;
+        } else if gated {
             wasm_component_middleware_wasi::p3::add_to_linker(&mut linker)?;
         } else {
             wasmtime_wasi::p3::add_to_linker(&mut linker)?;
@@ -324,6 +343,7 @@ impl P3Harness {
         let monotonic_now = Arc::new(AtomicU64::new(10_000_000_000));
         let mut builder = WasiCtxBuilder::new();
         builder
+            .allow_blocking_current_thread(blocking)
             .env("GREETING", "Hello")
             .args(&["program", "one"])
             .stdin(MemoryInputPipe::new("p3 input"))
@@ -350,7 +370,7 @@ impl P3Harness {
             stdout,
             stderr,
             monotonic_now,
-            _directory: directory,
+            directory,
         })
     }
 
@@ -413,6 +433,29 @@ impl P3Harness {
             .run_concurrent(async |accessor| self.guest.call_refused_open(accessor).await)
             .await??;
         Ok(refused)
+    }
+
+    async fn stream_read(&mut self, path: &str, slow: bool) -> wasmtime::Result<String> {
+        let result = self
+            .store
+            .run_concurrent(async |accessor| {
+                self.guest
+                    .call_stream_read(accessor, path.to_owned(), slow)
+                    .await
+            })
+            .await??;
+        Ok(result)
+    }
+
+    async fn cancel_stream_read(&mut self, path: &str) -> wasmtime::Result<()> {
+        self.store
+            .run_concurrent(async |accessor| {
+                self.guest
+                    .call_cancel_stream_read(accessor, path.to_owned())
+                    .await
+            })
+            .await??;
+        Ok(())
     }
 }
 
@@ -940,6 +983,226 @@ async fn p3_streams_and_clock_waits_retain_their_distinct_semantics() {
     assert_eq!(gated.stdout.contents(), plain.stdout.contents());
     assert_eq!(plain.stderr.contents().as_ref(), b"p3 stderr");
     assert_eq!(gated.stderr.contents(), plain.stderr.contents());
+}
+
+#[derive(Clone, Debug)]
+struct StreamCall {
+    function: String,
+    id: u64,
+    descriptor: u32,
+    bytes: usize,
+    retained: usize,
+    buffered: usize,
+}
+
+#[derive(Default)]
+struct StreamTrace {
+    openings: Vec<StreamCall>,
+    chunks: Vec<StreamCall>,
+}
+
+#[derive(Clone)]
+struct RecordStreams(Arc<Mutex<StreamTrace>>);
+
+impl Layer<State> for RecordStreams {
+    type Frame = ();
+
+    fn before(&self, _state: &mut State, call: &Call<'_>) -> Result<(), Denied> {
+        if call.interface != Some("wasi:filesystem/types") {
+            return Ok(());
+        }
+        let Some(descriptor) = call.handles.first().copied() else {
+            return Ok(());
+        };
+        let mut trace = self.0.lock().unwrap();
+        if call.function.starts_with("[stream-") {
+            let bytes = call
+                .args
+                .get("bytes")
+                .and_then(ArgumentValue::byte_len)
+                .unwrap();
+            let retained = call
+                .args
+                .get("bytes")
+                .and_then(ArgumentValue::as_bytes)
+                .map(<[u8]>::len)
+                .unwrap();
+            let buffered = call
+                .args
+                .get("buffered")
+                .and_then(ArgumentValue::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap();
+            trace.chunks.push(StreamCall {
+                function: call.function.to_owned(),
+                id: call.id,
+                descriptor,
+                bytes,
+                retained,
+                buffered,
+            });
+        } else if matches!(
+            call.function,
+            "[method]descriptor.read-via-stream"
+                | "[method]descriptor.write-via-stream"
+                | "[method]descriptor.append-via-stream"
+        ) {
+            trace.openings.push(StreamCall {
+                function: call.function.to_owned(),
+                id: call.id,
+                descriptor,
+                bytes: 0,
+                retained: 0,
+                buffered: 0,
+            });
+        }
+        Ok(())
+    }
+
+    fn after(&self, _state: &mut State, _call: &Call<'_>, (): (), _outcome: Outcome<'_>) {}
+}
+
+fn stream_data(len: usize) -> Vec<u8> {
+    (0..len)
+        .map(|index| u8::try_from((index * 31 + index / 7) & 0xff).unwrap())
+        .collect()
+}
+
+fn assert_chunks_match_opening(trace: &StreamTrace, stream_name: &str, opening_name: &str) {
+    let opening = trace
+        .openings
+        .iter()
+        .find(|call| call.function == opening_name)
+        .unwrap();
+    assert!(
+        trace
+            .chunks
+            .iter()
+            .filter(|call| call.function == stream_name)
+            .all(|chunk| chunk.id == opening.id && chunk.descriptor == opening.descriptor)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relayed_and_unrelayed_file_reads_match() {
+    let contents = stream_data(1024 * 1024 + 37);
+    let mut direct = P3Harness::new(true, Chain::builder().build())
+        .await
+        .unwrap();
+    fs::write(direct.directory.path().join("large.bin"), &contents).unwrap();
+    let direct_result = direct.stream_read("large.bin", false).await.unwrap();
+
+    let trace = Arc::new(Mutex::new(StreamTrace::default()));
+    let mut relayed = P3Harness::new_relayed(
+        Chain::builder()
+            .layer(RecordStreams(Arc::clone(&trace)))
+            .build(),
+    )
+    .await
+    .unwrap();
+    fs::write(relayed.directory.path().join("large.bin"), &contents).unwrap();
+    let relayed_result = relayed.stream_read("large.bin", false).await.unwrap();
+
+    assert_eq!(relayed_result, direct_result);
+    let trace = trace.lock().unwrap();
+    assert_eq!(
+        trace.chunks.iter().map(|chunk| chunk.bytes).sum::<usize>(),
+        contents.len()
+    );
+    assert!(
+        trace
+            .chunks
+            .iter()
+            .all(|chunk| chunk.retained == chunk.bytes)
+    );
+    assert_chunks_match_opening(
+        &trace,
+        "[stream-read]read-via-stream",
+        "[method]descriptor.read-via-stream",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_file_reader_never_exceeds_the_relay_bound() {
+    let trace = Arc::new(Mutex::new(StreamTrace::default()));
+    let mut harness = P3Harness::new_relayed(
+        Chain::builder()
+            .layer(RecordStreams(Arc::clone(&trace)))
+            .build(),
+    )
+    .await
+    .unwrap();
+    let contents = stream_data(8 * 1024 * 1024);
+    fs::write(harness.directory.path().join("slow.bin"), &contents).unwrap();
+
+    let result = harness.stream_read("slow.bin", true).await.unwrap();
+
+    assert!(result.contains(&format!("bytes={}", contents.len())));
+    let high_water = trace
+        .lock()
+        .unwrap()
+        .chunks
+        .iter()
+        .map(|chunk| chunk.buffered)
+        .max()
+        .unwrap();
+    assert!(high_water <= wasm_component_middleware_wasi::p3::DEFAULT_STREAM_BUFFER_CAPACITY);
+    assert_eq!(
+        high_water,
+        wasm_component_middleware_wasi::p3::DEFAULT_STREAM_BUFFER_CAPACITY
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn midstream_denial_returns_access_through_the_completion_future() {
+    let chain = Chain::builder()
+        .layer(Budget::new(100 * 1024, |call: &Call<'_>| {
+            (call.function == "[stream-read]read-via-stream")
+                .then(|| {
+                    call.args
+                        .get("bytes")
+                        .and_then(ArgumentValue::byte_len)
+                        .map(|bytes| ((), u64::try_from(bytes).unwrap()))
+                })
+                .flatten()
+        }))
+        .build();
+    let mut harness = P3Harness::new_relayed(chain).await.unwrap();
+    fs::write(
+        harness.directory.path().join("denied.bin"),
+        stream_data(1024 * 1024),
+    )
+    .unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        harness.stream_read("denied.bin", false),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert!(result.contains("completion=ErrorCode::Access"), "{result}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_a_relayed_read_does_not_hang() {
+    let mut harness = P3Harness::new_relayed(Chain::builder().build())
+        .await
+        .unwrap();
+    fs::write(
+        harness.directory.path().join("cancel.bin"),
+        stream_data(8 * 1024 * 1024),
+    )
+    .unwrap();
+
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        harness.cancel_stream_read("cancel.bin"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
 }
 
 #[derive(Clone)]

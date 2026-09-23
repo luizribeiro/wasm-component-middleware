@@ -3,12 +3,42 @@
 mod cli;
 mod clocks;
 mod filesystem;
+mod relay;
 
 use wasm_component_middleware::{MiddlewareView, RoutedInterface};
 use wasmtime::component::Linker;
 use wasmtime_wasi::WasiView;
 
 pub(super) const WASI_VERSION: &str = "0.3.0";
+
+/// Default maximum number of bytes buffered by each relayed byte stream.
+pub const DEFAULT_STREAM_BUFFER_CAPACITY: usize = 64 * 1024;
+
+/// Configuration for relayed byte streams on one interface.
+///
+/// Middleware sees the complete bytes of each chunk before the relay
+/// acknowledges them to the source. When a layer denies a chunk, that chunk
+/// remains unacknowledged, previously approved chunks drain to the destination,
+/// and the replacement completion future reports the denial. Relayed streams
+/// use [`wasmtime::component::StreamProducer`]'s default `try_into` behavior so
+/// a host-to-host short circuit cannot bypass the chain; unrelayed interfaces
+/// retain the original producer and its conversion behavior.
+#[derive(Clone, Copy)]
+pub struct StreamRelay<const CAPACITY: usize = DEFAULT_STREAM_BUFFER_CAPACITY>(());
+
+impl Default for StreamRelay<DEFAULT_STREAM_BUFFER_CAPACITY> {
+    fn default() -> Self {
+        Self(())
+    }
+}
+
+impl<const CAPACITY: usize> StreamRelay<CAPACITY> {
+    /// Creates relay options when `CAPACITY` is nonzero.
+    #[must_use]
+    pub const fn new() -> Option<Self> {
+        if CAPACITY == 0 { None } else { Some(Self(())) }
+    }
+}
 
 /// Interfaces routed by [`add_to_linker`].
 pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
@@ -55,6 +85,29 @@ where
     clocks::add_to_linker(linker)
 }
 
+/// Adds Preview 3 interfaces and relays filesystem byte streams through middleware.
+///
+/// Each transferred chunk appears as a synthetic filesystem call carrying the
+/// opening call's identifier and descriptor handle. Use [`add_to_linker`] when
+/// byte-level policy is unnecessary and the direct Wasmtime path is preferred.
+///
+/// # Errors
+///
+/// Returns an error if Wasmtime cannot register an interface.
+pub fn add_to_linker_with_stream_relay<T, const CAPACITY: usize>(
+    linker: &mut Linker<T>,
+    _relay: StreamRelay<CAPACITY>,
+) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    filesystem::add_to_linker_relayed::<T, CAPACITY>(linker)?;
+    wasmtime_wasi::p3::random::add_to_linker(linker)?;
+    wasmtime_wasi::p3::sockets::add_to_linker(linker)?;
+    cli::add_to_linker(linker)?;
+    clocks::add_to_linker(linker)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -63,6 +116,12 @@ mod tests {
     use wit_parser::Resolve;
 
     use super::WASI_VERSION;
+
+    #[test]
+    fn stream_relay_requires_a_nonzero_bound() {
+        assert!(super::StreamRelay::<0>::new().is_none());
+        assert!(super::StreamRelay::<8192>::new().is_some());
+    }
 
     #[test]
     fn reported_version_matches_every_vendored_dependency() {

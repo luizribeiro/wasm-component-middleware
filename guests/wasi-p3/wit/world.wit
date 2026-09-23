@@ -22,4 +22,6 @@ world workload {
   export exit-success: async func();
   export exit-code: async func();
   export refused-open: async func() -> bool;
+  export stream-read: async func(path: string, slow: bool) -> string;
+  export cancel-stream-read: async func(path: string);
 }

@@ -10,9 +10,11 @@ pub(crate) fn project<T>(state: &mut T) -> Gate<'_, T> {
     Gate { state }
 }
 
-pub(crate) struct GateData<T>(PhantomData<fn() -> T>);
+pub(crate) struct Unrelayed;
 
-impl<T: 'static> HasData for GateData<T> {
+pub(crate) struct GateData<T, M = Unrelayed>(PhantomData<fn() -> (T, M)>);
+
+impl<T: 'static, M: 'static> HasData for GateData<T, M> {
     type Data<'a> = Gate<'a, T>;
 }
 

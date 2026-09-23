@@ -206,7 +206,10 @@ pub enum ArgumentValue {
     String(String),
     /// A byte list represented by a bounded prefix and its original length.
     Bytes {
-        /// The first at most [`BYTE_ARGUMENT_PREFIX_LEN`] bytes.
+        /// Bytes retained for policy inspection.
+        ///
+        /// [`Self::bytes`] caps this data at [`BYTE_ARGUMENT_PREFIX_LEN`],
+        /// while [`Self::owned_bytes`] retains an already-owned buffer in full.
         prefix: Vec<u8>,
         /// The byte list's original length.
         total_len: usize,
@@ -242,6 +245,20 @@ impl ArgumentValue {
         }
     }
 
+    /// Creates a byte-list argument from data the caller already owns.
+    ///
+    /// Unlike [`Self::bytes`], this retains the whole buffer. Use it when the
+    /// data has already been copied for another purpose, such as a relayed
+    /// stream chunk, and layers need to inspect every byte.
+    #[must_use]
+    pub fn owned_bytes(value: Vec<u8>) -> Self {
+        let total_len = value.len();
+        Self::Bytes {
+            prefix: value,
+            total_len,
+        }
+    }
+
     /// Creates a variant case without a payload.
     #[must_use]
     pub const fn case(case: &'static str) -> Self {
@@ -257,7 +274,7 @@ impl ArgumentValue {
         }
     }
 
-    /// Returns the retained byte prefix when this value has byte-list type.
+    /// Returns the retained bytes when this value has byte-list type.
     #[must_use]
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
@@ -454,6 +471,15 @@ mod tests {
         let value = ArgumentValue::bytes(&bytes);
 
         assert_eq!(value.as_bytes(), Some(&bytes[..BYTE_ARGUMENT_PREFIX_LEN]));
+        assert_eq!(value.byte_len(), Some(bytes.len()));
+    }
+
+    #[test]
+    fn owned_byte_arguments_retain_the_complete_buffer() {
+        let bytes = vec![7; BYTE_ARGUMENT_PREFIX_LEN + 17];
+        let value = ArgumentValue::owned_bytes(bytes.clone());
+
+        assert_eq!(value.as_bytes(), Some(bytes.as_slice()));
         assert_eq!(value.byte_len(), Some(bytes.len()));
     }
 

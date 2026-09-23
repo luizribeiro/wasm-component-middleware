@@ -9,12 +9,14 @@ use wasmtime_wasi::p3::filesystem::{FilesystemError, FilesystemResult};
 use crate::gate::{Gate, GateData, gate, produced_directories, produced_resource, project};
 
 use super::WASI_VERSION;
+use super::relay::{Origin, RelayMode, Relayed, relay_bytes, relay_completion};
 
-fn delegate_access<'a, T>(
-    store: &'a mut Access<'_, T, GateData<T>>,
+fn delegate_access<'a, T, M>(
+    store: &'a mut Access<'_, T, GateData<T, M>>,
 ) -> Access<'a, T, WasiFilesystem>
 where
     T: WasiView + MiddlewareView + 'static,
+    M: 'static,
 {
     Access::new(store.as_context_mut(), |state: &mut T| state.filesystem())
 }
@@ -46,16 +48,57 @@ where
     }
 }
 
-impl<T> types::HostDescriptorWithStore<T> for GateData<T>
+impl<T, M> types::HostDescriptorWithStore<T> for GateData<T, M>
 where
     T: WasiView + MiddlewareView + 'static,
+    M: RelayMode,
 {
     fn read_via_stream(
         mut store: Access<T, Self>,
         fd: Resource<Descriptor>,
         offset: u64,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
-        gate!(access store, "wasi:filesystem/types", "[method]descriptor.read-via-stream", handles = [fd.rep()], args = [offset = offset], delegate = |store| types::HostDescriptorWithStore::read_via_stream(delegate_access(store), fd, offset))
+        let Some(capacity) = M::CAPACITY else {
+            return gate!(access store, "wasi:filesystem/types", "[method]descriptor.read-via-stream", handles = [fd.rep()], args = [offset = offset], delegate = |store| types::HostDescriptorWithStore::read_via_stream(delegate_access(store), fd, offset));
+        };
+        let descriptor = fd.rep();
+        let chain = std::sync::Arc::clone(store.data_mut().middleware().chain());
+        let handles = [descriptor];
+        let arguments = wasm_component_middleware::Arguments::new().with("offset", offset);
+        let call = wasm_component_middleware::Call::new(
+            chain.next_id(),
+            wasm_component_middleware::Direction::Import,
+            "[method]descriptor.read-via-stream",
+        )
+        .in_interface("wasi:filesystem/types", Some(WASI_VERSION))
+        .with_handles(&handles)
+        .with_args(&arguments);
+        chain.dispatch_access(store, &call, |store| {
+            let (input, completion) = types::HostDescriptorWithStore::read_via_stream(
+                delegate_access(store),
+                fd,
+                offset,
+            )?;
+            let shared_origin = Origin {
+                call_id: call.id,
+                interface: "wasi:filesystem/types",
+                version: WASI_VERSION,
+                function: "[stream-read]read-via-stream",
+                handles: std::sync::Arc::from([descriptor]),
+            };
+            let (output, shared) = relay_bytes(
+                store,
+                input,
+                shared_origin,
+                capacity,
+                Err(types::ErrorCode::Access),
+            )?;
+            let completion = relay_completion(store, completion, shared)?;
+            Ok((
+                (output, completion),
+                wasm_component_middleware::Completion::default(),
+            ))
+        })
     }
 
     fn write_via_stream(
@@ -462,6 +505,16 @@ where
 {
     types::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     preopens::add_to_linker::<T, GateData<T>>(linker, project::<T>)
+}
+
+pub(super) fn add_to_linker_relayed<T, const CAPACITY: usize>(
+    linker: &mut Linker<T>,
+) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    types::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    preopens::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)
 }
 
 #[cfg(test)]

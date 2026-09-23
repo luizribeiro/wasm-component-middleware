@@ -79,6 +79,10 @@ use wasm_component_middleware_wasi::p2::add_to_linker_sync;
 add_to_linker_sync(&mut linker)?;
 ```
 
+The middleware linker routes `wasi:cli`, `wasi:clocks`, `wasi:filesystem`,
+and `wasi:random` on both previews, plus `wasi:io` on Preview 2. Socket
+interfaces remain on Wasmtime's direct path.
+
 The [`wasi-p2` example](crates/wasm-component-middleware-wasi/examples/wasi-p2.rs)
 runs a Rust guest that reads an environment variable and the wall clock before
 writing to standard output:

@@ -6,9 +6,11 @@
 mod async_dispatch;
 mod chain;
 mod context;
+mod routing;
 mod types;
 
 pub use async_dispatch::StateAccess;
 pub use chain::{Chain, ChainBuilder};
 pub use context::{InvocationContext, MiddlewareCtx, MiddlewareView};
+pub use routing::{Routed, Routing, dispatch_import, route_export};
 pub use types::{Call, Completion, Denied, Direction, Layer, Outcome};

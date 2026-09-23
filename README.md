@@ -255,6 +255,77 @@ individually visible.
 If a component must never use sockets, do not link the socket interfaces.
 That is cheaper and less error-prone than gating their large API surface.
 
+## HTTP
+
+Switch the `wasi:http` linker functions to the matching module in
+`wasm-component-middleware-wasi-http`. Preview 2 exposes the same async, sync,
+and HTTP-only entry points as `wasmtime-wasi-http`; Preview 3 exposes
+`p3::add_to_linker`. Every call in `wasi:http/types`,
+`wasi:http/outgoing-handler`, and `wasi:http/client` then reaches middleware.
+Preview 2 bodies are visible through `wasi:io/streams` when the HTTP-only
+linker is combined with `wasm-component-middleware-wasi`'s synchronous gates.
+The convenience `p2::add_to_linker_async` currently links Wasmtime's proxy
+interfaces directly, including ungated streams. Preview 3 body streams
+currently pass through without a byte relay.
+
+Per-function gates do not see a complete request while it is being assembled.
+Install `WasiHttpHooks` beside `WasiHttpCtx` to route the final request through
+one synthetic `wasi:http/request-hook.[send-request]` call. The pseudo-interface
+is shared by both HTTP versions because Wasmtime exposes one common hook. Its
+arguments contain `method`, `scheme`, `authority`, `path`, and `headers`; a refusal becomes
+`error-code::http-request-denied`:
+
+```rust
+let policy_chain = Chain::builder()
+    .layer(Logger::stderr())
+    .layer(AllowAuthority(allowed_authority))
+    .build();
+let policy = HttpPolicy {
+    middleware: MiddlewareCtx::new(
+        policy_chain,
+        InvocationContext::new("http-client"),
+    ),
+};
+let hooks = WasiHttpHooks::new(policy, DefaultHooks);
+
+impl WasiHttpView for State {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.http,
+            table: &mut self.table,
+            hooks: &mut self.hooks,
+        }
+    }
+}
+```
+
+The hook owns a small, separately locked policy state because Wasmtime lends
+only `&mut dyn WasiHttpHooks` at the complete-request seam. Its chain is
+independent from the store chain: the two chains have separate state and call
+identifiers, and their calls are not correlated. On Preview 2, the store
+chain's `wasi:http/outgoing-handler.handle` call returns before the request hook
+decides because Wasmtime sends the request from a spawned task. Put the same
+`Arc`-backed layer in both chains when they need shared policy or observations.
+Existing custom hooks are passed as the second constructor argument and remain
+the delegate; `DefaultHooks` preserves Wasmtime's default sender.
+
+An HTTP policy is required even when sockets are restricted:
+wasmtime-wasi-http's default sender opens TCP connections directly and does
+not consult `WasiCtx`'s socket address check. The
+[`http-allowlist` example](crates/wasm-component-middleware-wasi-http/examples/http-allowlist.rs)
+starts two loopback servers, allows one authority, and returns
+`HttpRequestDenied` for the other:
+
+```console
+$ cargo run --example http-allowlist
+→ #1 import wasi:http/request-hook.[send-request](method="GET", scheme="http", authority="127.0.0.1:62502", ...)
+← #1 returned
+allowed body: GET http://127.0.0.1:62502/message x-client=middleware -> 201 x-server=loopback | hello from the allowed server
+→ #2 import wasi:http/request-hook.[send-request](method="GET", scheme="http", authority="127.0.0.1:62503", ...)
+← #2 failed: authority is not allowed
+denied error: ErrorCode::HttpRequestDenied
+```
+
 ## Refusing calls
 
 The [`deny` example](crates/wasm-component-middleware/examples/deny.rs) puts a

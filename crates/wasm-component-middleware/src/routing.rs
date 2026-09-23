@@ -152,15 +152,6 @@ macro_rules! route_imports {
     };
 }
 
-/// Routes one generated host-trait method through a [`Routing`](crate::Routing) receiver.
-#[macro_export]
-macro_rules! route_import {
-    ($routing:expr, $interface:expr, $function:expr, $args:expr, $body:expr) => {{
-        let arguments = $args;
-        $routing.dispatch($interface, $function, &arguments, $body)
-    }};
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

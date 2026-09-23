@@ -1526,7 +1526,9 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 name = "wasm-component-middleware"
 version = "0.0.0"
 dependencies = [
+ "test-guests",
  "wasmtime",
+ "wasmtime-wasi",
 ]
 
 [[package]]

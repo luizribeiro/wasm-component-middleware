@@ -185,13 +185,17 @@ open public/three.txt: access
 
 ## Sockets
 
-Preview 2 socket gates expose bind, connect, UDP stream, and datagram
-destinations through `Call::args`. An `ip-socket-address` is rendered as a
-standard `host:port` string, so a layer can use `SocketAddr` instead of
-reimplementing the WIT variants. The [`net-allowlist` example](crates/wasm-component-middleware-wasi/examples/net-allowlist.rs)
-allows one loopback destination and refuses another. Its UDP policy checks
-both the optional address passed to `udp-socket.stream` and every remote
-address passed to `outgoing-datagram-stream.send`:
+Preview 2 and Preview 3 socket gates expose bind, connect, UDP send, stream,
+and datagram destinations through `Call::args`. An `ip-socket-address` is
+rendered as a standard `host:port` string, so a layer can use `SocketAddr`
+instead of reimplementing the WIT variants. Preview 3 TCP byte streams also
+use [`StreamRelay`](#streams) when it is enabled. The
+[`net-allowlist` example](crates/wasm-component-middleware-wasi/examples/net-allowlist.rs)
+runs the same policy against both previews, allowing one loopback destination
+and refusing another. Its Preview 2 UDP policy checks both the optional address
+passed to `udp-socket.stream` and every datagram destination; Preview 3 checks
+`udp-socket.connect` before allowing address-free sends on a connected socket,
+as well as the optional destination passed to `udp-socket.send`:
 
 ```rust
 let allowed = call
@@ -221,11 +225,32 @@ $ cargo run --example net-allowlist
 ...
 → #45 import wasi:sockets/udp@0.2.12.[method]outgoing-datagram-stream.send(datagrams=[[3 bytes "udp", some("127.0.0.1:62502")]]) handles=[2]
 ← #45 returned
+...
+→ #4 import wasi:sockets/types@0.3.0.[method]tcp-socket.connect(remote_address="127.0.0.1:62504") handles=[0]
+← #4 returned
+...
+→ #18 import wasi:sockets/types@0.3.0.[method]udp-socket.send(data=3 bytes "udp", remote_address=some("127.0.0.1:62505")) handles=[0]
+← #18 failed: remote address is not allowed
+...
+→ #21 import wasi:sockets/types@0.3.0.[method]udp-socket.connect(remote_address="127.0.0.1:62505") handles=[0]
+← #21 failed: remote address is not allowed
+p2:
 allowed: hello
 denied: access-denied
 udp allowed: delivered
 udp denied: access-denied
+p3:
+allowed: hello
+denied: access-denied
+udp allowed: delivered
+udp denied: access-denied
+udp connected denied: access-denied
 ```
+
+Preview 3 layers can gate `tcp-socket.listen`, but Wasmtime creates accepted
+TCP sockets inside its returned resource stream. Those individual sockets are
+therefore not visible to layers. Preview 2 `tcp-socket.accept` calls remain
+individually visible.
 
 If a component must never use sockets, do not link the socket interfaces.
 That is cheaper and less error-prone than gating their large API surface.

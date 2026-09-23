@@ -33,7 +33,7 @@ wasmtime::component::bindgen!({
 });
 
 route_imports! {
-    example::hello::host::Host => State as "example:hello/host" {
+    const HELLO_HOST: example::hello::host::Host => State as "example:hello/host" {
         fn user_name(&mut self) -> wasmtime::Result<String>;
         fn log(&mut self, message: String) -> wasmtime::Result<()>;
     }
@@ -42,6 +42,12 @@ route_imports! {
 example::hello::host::add_to_linker::<_, Routed<State>>(
     &mut linker,
     Routed::<State>::get,
+)?;
+verify_routing(
+    &engine,
+    &component,
+    [HELLO_HOST],
+    ["wasi:"],
 )?;
 ```
 
@@ -60,3 +66,24 @@ $ cargo run --example trace
 ← #1 returned
 Hello, Ada!
 ```
+
+## Refusing calls
+
+The [`deny` example](crates/wasm-component-middleware/examples/deny.rs) puts a
+logger outside an allowlist that permits the root export and `log`, but refuses
+`user-name`:
+
+```rust
+let calls = Allowlist::new()
+    .allow_function(None, "greet")
+    .allow_function(Some(HELLO_HOST.name()), "log");
+let chain = Chain::builder()
+    .layer(Logger::stderr())
+    .layer(calls)
+    .build();
+```
+
+For an imported function whose WIT result has no error case, a `Denied` error
+becomes a trap and the trapped store cannot be entered again. If refusal is an
+expected guest-visible outcome, model it in WIT as a `result` and map the
+denial into its error variant instead of propagating a Wasmtime error.

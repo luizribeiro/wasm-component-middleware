@@ -86,7 +86,8 @@
           cargo-package = cargoHook {
             name = "cargo-package-hook";
             text = ''
-              cargo package -p wasm-component-middleware -p wasm-component-middleware-wasi -p wasm-component-middleware-wasi-http --locked --allow-dirty
+              cargo package -p wasm-component-middleware --locked --allow-dirty
+              cargo package -p wasm-component-middleware -p wasm-component-middleware-wasi -p wasm-component-middleware-wasi-http --locked --allow-dirty --no-verify
             '';
           };
           doctests = cargoHook {

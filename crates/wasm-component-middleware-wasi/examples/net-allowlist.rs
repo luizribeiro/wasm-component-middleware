@@ -10,13 +10,24 @@ use wasm_component_middleware::{
     MiddlewareView, Outcome,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
-use wasmtime::{Engine, Store};
+use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
     path: "../../guests/wasi-p2/wit",
     world: "workload",
 });
+
+mod p3 {
+    wasmtime::component::bindgen!({
+        path: "../../guests/wasi-p3/wit",
+        world: "workload",
+        imports: { default: async | store },
+        exports: { default: async | store },
+        with: { "wasi": wasmtime_wasi::p3::bindings },
+        require_store_data_send: true,
+    });
+}
 
 struct State {
     middleware: MiddlewareCtx<Self>,
@@ -96,6 +107,18 @@ impl Layer<State> for AllowAddress {
                 .args
                 .get("datagrams")
                 .is_some_and(|datagrams| self.allows_datagrams(datagrams)),
+            "[method]tcp-socket.connect" => call
+                .args
+                .get("remote_address")
+                .is_some_and(|address| self.allows_address(address)),
+            "[method]udp-socket.connect" => call
+                .args
+                .get("remote_address")
+                .is_some_and(|address| self.allows_address(address)),
+            "[method]udp-socket.send" => call
+                .args
+                .get("remote_address")
+                .is_some_and(|address| self.allows_optional_address(address)),
             _ => return Ok(()),
         };
         if allowed {
@@ -112,60 +135,140 @@ fn listener() -> std::io::Result<TcpListener> {
     TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
 }
 
-fn main() -> wasmtime::Result<()> {
-    let allowed = listener()?;
-    let denied = listener()?;
-    let allowed_address = allowed.local_addr()?;
-    let denied_address = denied.local_addr()?;
-    let allowed_udp = UdpSocket::bind(allowed_address)?;
-    let _denied_udp = UdpSocket::bind(denied_address)?;
-    allowed_udp.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let echo = thread::spawn(move || -> std::io::Result<()> {
-        let (mut stream, _) = allowed.accept()?;
-        let mut message = [0; 5];
-        stream.read_exact(&mut message)?;
-        stream.write_all(&message)
-    });
-    let receive_datagram = thread::spawn(move || -> std::io::Result<()> {
-        let mut message = [0; 3];
-        let received = allowed_udp.recv(&mut message)?;
-        if received == message.len() && message == *b"udp" {
-            Ok(())
-        } else {
-            Err(std::io::Error::other("unexpected UDP datagram"))
-        }
-    });
+struct Servers {
+    allowed_address: SocketAddr,
+    denied_address: SocketAddr,
+    echo: thread::JoinHandle<std::io::Result<()>>,
+    receive_datagram: thread::JoinHandle<std::io::Result<()>>,
+}
 
+impl Servers {
+    fn start() -> std::io::Result<Self> {
+        let allowed = listener()?;
+        let denied = listener()?;
+        let allowed_address = allowed.local_addr()?;
+        let denied_address = denied.local_addr()?;
+        let allowed_udp = UdpSocket::bind(allowed_address)?;
+        let _denied_udp = UdpSocket::bind(denied_address)?;
+        allowed_udp.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let echo = thread::spawn(move || -> std::io::Result<()> {
+            let (mut stream, _) = allowed.accept()?;
+            let mut message = [0; 5];
+            stream.read_exact(&mut message)?;
+            stream.write_all(&message)
+        });
+        let receive_datagram = thread::spawn(move || -> std::io::Result<()> {
+            let mut message = [0; 3];
+            let received = allowed_udp.recv(&mut message)?;
+            if received == message.len() && message == *b"udp" {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("unexpected UDP datagram"))
+            }
+        });
+        Ok(Self {
+            allowed_address,
+            denied_address,
+            echo,
+            receive_datagram,
+        })
+    }
+
+    fn finish(self) -> wasmtime::Result<()> {
+        self.echo
+            .join()
+            .map_err(|_| wasmtime::Error::msg("echo server panicked"))??;
+        self.receive_datagram
+            .join()
+            .map_err(|_| wasmtime::Error::msg("UDP receiver panicked"))??;
+        Ok(())
+    }
+}
+
+fn wasi() -> WasiCtx {
+    let mut wasi = WasiCtxBuilder::new();
+    wasi.allow_tcp(true)
+        .allow_udp(true)
+        .allow_ip_name_lookup(true)
+        .socket_addr_check(|address, _| Box::pin(async move { address.ip().is_loopback() }));
+    wasi.build()
+}
+
+fn run_p2(servers: Servers) -> wasmtime::Result<String> {
     let engine = Engine::default();
     let component = Component::from_file(&engine, test_guests::wasi_p2())?;
     let mut linker = Linker::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker)?;
     let chain = Chain::builder()
         .layer(Logger::stderr())
-        .layer(AllowAddress(allowed_address))
+        .layer(AllowAddress(servers.allowed_address))
         .build();
-    let mut wasi = WasiCtxBuilder::new();
-    wasi.allow_tcp(true)
-        .allow_udp(true)
-        .allow_ip_name_lookup(true)
-        .socket_addr_check(|address, _| Box::pin(async move { address.ip().is_loopback() }));
     let mut store = Store::new(
         &engine,
         State {
-            middleware: MiddlewareCtx::new(chain, InvocationContext::new("net-allowlist")),
+            middleware: MiddlewareCtx::new(
+                std::sync::Arc::clone(&chain),
+                InvocationContext::new("net-allowlist-p2"),
+            ),
             table: ResourceTable::new(),
-            wasi: wasi.build(),
+            wasi: wasi(),
         },
     );
     let guest = Workload::instantiate(&mut store, &component, &linker)?;
-    let output =
-        guest.call_net_allowlist(&mut store, allowed_address.port(), denied_address.port())?;
+    let output = guest.call_net_allowlist(
+        &mut store,
+        servers.allowed_address.port(),
+        servers.denied_address.port(),
+    )?;
+    servers.finish()?;
+    Ok(output)
+}
 
-    echo.join()
-        .map_err(|_| wasmtime::Error::msg("echo server panicked"))??;
-    receive_datagram
-        .join()
-        .map_err(|_| wasmtime::Error::msg("UDP receiver panicked"))??;
-    print!("{output}");
+async fn run_p3(servers: Servers) -> wasmtime::Result<String> {
+    let mut config = Config::new();
+    config.wasm_component_model_async(true);
+    config.concurrency_support(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::from_file(&engine, test_guests::wasi_p3())?;
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    wasm_component_middleware_wasi::p3::add_to_linker(&mut linker)?;
+    let chain = Chain::builder()
+        .layer(Logger::stderr())
+        .layer(AllowAddress(servers.allowed_address))
+        .build();
+    let mut store = Store::new(
+        &engine,
+        State {
+            middleware: MiddlewareCtx::new(
+                std::sync::Arc::clone(&chain),
+                InvocationContext::new("net-allowlist-p3"),
+            ),
+            table: ResourceTable::new(),
+            wasi: wasi(),
+        },
+    );
+    let guest = p3::Workload::instantiate_async(&mut store, &component, &linker).await?;
+    let output = store
+        .run_concurrent(async |accessor| {
+            guest
+                .call_net_allowlist(
+                    accessor,
+                    servers.allowed_address.port(),
+                    servers.denied_address.port(),
+                )
+                .await
+        })
+        .await??;
+    servers.finish()?;
+    Ok(output)
+}
+
+fn main() -> wasmtime::Result<()> {
+    print!("p2:\n{}", run_p2(Servers::start()?)?);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    print!("p3:\n{}", runtime.block_on(run_p3(Servers::start()?))?);
     Ok(())
 }

@@ -1976,10 +1976,17 @@ fn net_allowlist_example_traces_addresses_and_reports_access() {
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         concat!(
+            "p2:\n",
             "allowed: hello\n",
             "denied: access-denied\n",
             "udp allowed: delivered\n",
             "udp denied: access-denied\n",
+            "p3:\n",
+            "allowed: hello\n",
+            "denied: access-denied\n",
+            "udp allowed: delivered\n",
+            "udp denied: access-denied\n",
+            "udp connected denied: access-denied\n",
         )
     );
     let trace = strip_loopback_ports(&String::from_utf8(output.stderr).unwrap());
@@ -2011,12 +2018,38 @@ fn net_allowlist_example_traces_addresses_and_reports_access() {
             line.contains("some(\"127.0.0.1:<port>\")") && line.contains("handles=")
         })
     );
+    let p3_connects = trace
+        .lines()
+        .filter(|line| line.contains("[method]tcp-socket.connect"))
+        .collect::<Vec<_>>();
+    assert_eq!(p3_connects.len(), 2, "{trace}");
+    assert!(p3_connects.iter().all(|line| {
+        line.contains("remote_address=\"127.0.0.1:<port>\"") && line.contains("handles=")
+    }));
+    let p3_udp_connects = trace
+        .lines()
+        .filter(|line| line.contains("[method]udp-socket.connect"))
+        .collect::<Vec<_>>();
+    assert_eq!(p3_udp_connects.len(), 1, "{trace}");
+    assert!(p3_udp_connects.iter().all(|line| {
+        line.contains("remote_address=\"127.0.0.1:<port>\"") && line.contains("handles=")
+    }));
+    let p3_sends = trace
+        .lines()
+        .filter(|line| line.contains("[method]udp-socket.send"))
+        .collect::<Vec<_>>();
+    assert_eq!(p3_sends.len(), 2, "{trace}");
+    assert!(p3_sends.iter().all(|line| {
+        line.contains("data=3 bytes \"udp\"")
+            && line.contains("remote_address=some(\"127.0.0.1:<port>\")")
+            && line.contains("handles=")
+    }));
     assert!(trace.contains("returned\n"), "{trace}");
     assert_eq!(
         trace
             .matches("failed: remote address is not allowed\n")
             .count(),
-        2,
+        5,
         "{trace}"
     );
 }

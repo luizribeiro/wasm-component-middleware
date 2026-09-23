@@ -2,8 +2,9 @@ use std::future::Future;
 
 use wasmtime::component::{Access, Accessor, HasData};
 
-use crate::chain::{ActiveLayers, outcome};
-use crate::{Call, Chain, Completion, Outcome};
+use crate::chain::{ActiveLayers, CancellationQueue, PendingCancellation, outcome};
+use crate::types::OwnedCall;
+use crate::{Call, Chain, Completion, MiddlewareView, Outcome};
 
 /// Lends mutable store data to a synchronous closure.
 ///
@@ -48,8 +49,12 @@ impl<S: 'static> Chain<S> {
     ) -> wasmtime::Result<R>
     where
         A: StateAccess<S>,
+        S: MiddlewareView,
     {
-        let (frames, denial) = access.with_state(|state| self.before(state, call));
+        let (frames, denial) = access.with_state(|state| {
+            Self::deliver_cancellations(state);
+            self.before(state, call)
+        });
         let result = match denial {
             Some(denied) => Err(denied.into()),
             None => body(&mut access),
@@ -61,8 +66,11 @@ impl<S: 'static> Chain<S> {
 
     /// Runs an asynchronous body between synchronous middleware hooks.
     ///
-    /// Dropping the returned future after its body starts runs the active
-    /// layers' `after` hooks with [`Outcome::Cancelled`].
+    /// Dropping the returned future after its body starts queues the active
+    /// layers' `after` hooks with [`Outcome::Cancelled`]. The hooks run once
+    /// the store is next available, at the start of its next dispatch or when
+    /// an export dispatch returns. They do not run if the store is dropped
+    /// first.
     ///
     /// # Errors
     ///
@@ -75,13 +83,19 @@ impl<S: 'static> Chain<S> {
     ) -> wasmtime::Result<R>
     where
         A: StateAccess<S>,
+        S: MiddlewareView,
         F: FnOnce() -> Fut,
         Fut: Future<Output = wasmtime::Result<(R, Completion)>>,
     {
-        let (frames, denial) = access.with_state(|state| self.before(state, call));
+        let (cancellations, frames, denial) = access.with_state(|state| {
+            Self::deliver_cancellations(state);
+            let cancellations = state.middleware().cancellations();
+            let (frames, denial) = self.before(state, call);
+            (cancellations, frames, denial)
+        });
         let mut guard = CancellationGuard {
-            access: &mut access,
-            call,
+            cancellations,
+            call: Some(OwnedCall::from_call(call)),
             frames: Some(frames),
         };
         let result = match denial {
@@ -89,38 +103,34 @@ impl<S: 'static> Chain<S> {
             None => body().await,
         };
         let outcome = outcome(result.as_ref().map(|(_, completion)| completion));
-        guard.finish(outcome);
+        guard.finish(&mut access, call, outcome);
         result.map(|(value, _)| value)
     }
 }
 
-struct CancellationGuard<'access, 'call, 'data, S: 'static, A>
-where
-    A: StateAccess<S>,
-{
-    access: &'access mut A,
-    call: &'call Call<'data>,
+struct CancellationGuard<S> {
+    cancellations: CancellationQueue<S>,
+    call: Option<OwnedCall>,
     frames: Option<ActiveLayers<S>>,
 }
 
-impl<S: 'static, A> CancellationGuard<'_, '_, '_, S, A>
-where
-    A: StateAccess<S>,
-{
-    fn finish(&mut self, outcome: Outcome<'_>) {
+impl<S: 'static> CancellationGuard<S> {
+    fn finish<A>(&mut self, access: &mut A, call: &Call<'_>, outcome: Outcome<'_>)
+    where
+        A: StateAccess<S>,
+    {
         if let Some(frames) = self.frames.take() {
-            self.access
-                .with_state(|state| Chain::after(state, self.call, frames, outcome));
+            access.with_state(|state| Chain::after(state, call, frames, outcome));
         }
     }
 }
 
-impl<S: 'static, A> Drop for CancellationGuard<'_, '_, '_, S, A>
-where
-    A: StateAccess<S>,
-{
+impl<S> Drop for CancellationGuard<S> {
     fn drop(&mut self) {
-        self.finish(Outcome::Cancelled);
+        if let (Some(frames), Some(call)) = (self.frames.take(), self.call.take()) {
+            self.cancellations
+                .push(PendingCancellation { call, frames });
+        }
     }
 }
 
@@ -128,15 +138,37 @@ where
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::future::{Future, pending};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, Waker};
 
-    use crate::{Call, Chain, Completion, Denied, Direction, Layer, Outcome, StateAccess};
+    use crate::{
+        Call, Chain, Completion, Denied, Direction, InvocationContext, Layer, MiddlewareCtx,
+        MiddlewareView, Outcome, StateAccess,
+    };
 
-    #[derive(Default)]
     struct State {
+        middleware: Option<MiddlewareCtx<Self>>,
         events: Vec<String>,
         deny: bool,
+    }
+
+    impl State {
+        fn new(chain: &Arc<Chain<Self>>) -> Self {
+            Self {
+                middleware: Some(MiddlewareCtx::new(
+                    Arc::clone(chain),
+                    InvocationContext::new("test"),
+                )),
+                events: Vec::new(),
+                deny: false,
+            }
+        }
+    }
+
+    impl MiddlewareView for State {
+        fn middleware(&mut self) -> &mut MiddlewareCtx<Self> {
+            self.middleware.as_mut().unwrap()
+        }
     }
 
     struct MemoryAccess(RefCell<State>);
@@ -199,7 +231,7 @@ mod tests {
     #[test]
     fn reports_returned_completion() {
         let chain = Chain::builder().layer(Observer("observer")).build();
-        let access = MemoryAccess(RefCell::new(State::default()));
+        let access = MemoryAccess(RefCell::new(State::new(&chain)));
 
         let value = run_ready(chain.dispatch_async(&access, &call(), || async {
             Ok((17, Completion { produced: vec![9] }))
@@ -216,7 +248,7 @@ mod tests {
     #[test]
     fn reports_body_failure() {
         let chain = Chain::builder().layer(Observer("observer")).build();
-        let access = MemoryAccess(RefCell::new(State::default()));
+        let access = MemoryAccess(RefCell::new(State::new(&chain)));
 
         let error = run_ready(
             chain.dispatch_async::<_, (), _, _>(&access, &call(), || async {
@@ -235,10 +267,9 @@ mod tests {
     #[test]
     fn reports_denial_without_running_body() {
         let chain = Chain::builder().layer(Observer("observer")).build();
-        let access = MemoryAccess(RefCell::new(State {
-            deny: true,
-            ..State::default()
-        }));
+        let mut state = State::new(&chain);
+        state.deny = true;
+        let access = MemoryAccess(RefCell::new(state));
         let body_ran = Cell::new(false);
 
         let error = run_ready(chain.dispatch_async(&access, &call(), || async {
@@ -253,12 +284,12 @@ mod tests {
     }
 
     #[test]
-    fn dropped_body_reports_cancellation() {
+    fn queued_cancellation_precedes_the_next_call() {
         let chain = Chain::builder()
             .layer(Observer("outer"))
             .layer(Observer("inner"))
             .build();
-        let access = MemoryAccess(RefCell::new(State::default()));
+        let access = MemoryAccess(RefCell::new(State::new(&chain)));
         let started = Cell::new(false);
         let call = call();
         let mut future = Box::pin(
@@ -273,6 +304,14 @@ mod tests {
         assert!(started.get());
         drop(future);
 
+        assert_eq!(access.0.borrow().events, ["before outer", "before inner"]);
+
+        let next_call = Call::new(2, Direction::Import, "next");
+        run_ready(chain.dispatch_async(&access, &next_call, || async {
+            Ok(((), Completion::default()))
+        }))
+        .unwrap();
+
         assert_eq!(
             access.0.borrow().events,
             [
@@ -280,6 +319,10 @@ mod tests {
                 "before inner",
                 "after inner cancelled",
                 "after outer cancelled",
+                "before outer",
+                "before inner",
+                "after inner returned []",
+                "after outer returned []",
             ]
         );
     }
@@ -289,7 +332,7 @@ mod tests {
         fn assert_send(_: impl Send) {}
 
         let chain = Chain::builder().layer(Observer("observer")).build();
-        let access = SendAccess(Mutex::new(State::default()));
+        let access = SendAccess(Mutex::new(State::new(&chain)));
         let call = call();
 
         assert_send(

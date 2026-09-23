@@ -1,9 +1,10 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use wasmtime::{AsContextMut, StoreContextMut};
 
-use crate::{Call, Completion, Denied, Layer, Outcome};
+use crate::types::OwnedCall;
+use crate::{Call, Completion, Denied, Layer, MiddlewareView, Outcome};
 
 pub(crate) trait ActiveLayer<S>: Send {
     fn after(self: Box<Self>, state: &mut S, call: &Call<'_>, outcome: Outcome<'_>);
@@ -52,6 +53,41 @@ where
 
 pub(crate) type ActiveLayers<S> = Vec<Box<dyn ActiveLayer<S>>>;
 
+pub(crate) struct PendingCancellation<S> {
+    pub(crate) call: OwnedCall,
+    pub(crate) frames: ActiveLayers<S>,
+}
+
+pub(crate) struct CancellationQueue<S>(Arc<Mutex<Vec<PendingCancellation<S>>>>);
+
+impl<S> Clone for CancellationQueue<S> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<S> Default for CancellationQueue<S> {
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(Vec::new())))
+    }
+}
+
+impl<S> CancellationQueue<S> {
+    pub(crate) fn push(&self, cancellation: PendingCancellation<S>) {
+        self.lock().push(cancellation);
+    }
+
+    fn take(&self) -> Vec<PendingCancellation<S>> {
+        std::mem::take(&mut *self.lock())
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<PendingCancellation<S>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// An ordered, type-erased collection of middleware layers.
 pub struct Chain<S> {
     layers: Vec<Arc<dyn ErasedLayer<S>>>,
@@ -81,7 +117,11 @@ impl<S: 'static> Chain<S> {
         state: &mut S,
         call: &Call<'_>,
         body: impl FnOnce(&mut S) -> wasmtime::Result<(R, Completion)>,
-    ) -> wasmtime::Result<R> {
+    ) -> wasmtime::Result<R>
+    where
+        S: MiddlewareView,
+    {
+        Self::deliver_cancellations(state);
         let (frames, denial) = self.before(state, call);
         let result = match denial {
             Some(denied) => Err(denied.into()),
@@ -102,7 +142,11 @@ impl<S: 'static> Chain<S> {
         mut store: StoreContextMut<'_, S>,
         call: &Call<'_>,
         body: impl FnOnce(StoreContextMut<'_, S>) -> wasmtime::Result<R>,
-    ) -> wasmtime::Result<R> {
+    ) -> wasmtime::Result<R>
+    where
+        S: MiddlewareView,
+    {
+        Self::deliver_cancellations(store.data_mut());
         let (frames, denial) = self.before(store.data_mut(), call);
         let result = match denial {
             Some(denied) => Err(denied.into()),
@@ -111,7 +155,19 @@ impl<S: 'static> Chain<S> {
         let completion = Completion::default();
         let outcome = outcome(result.as_ref().map(|_| &completion));
         Self::after(store.data_mut(), call, frames, outcome);
+        Self::deliver_cancellations(store.data_mut());
         result
+    }
+
+    pub(crate) fn deliver_cancellations(state: &mut S)
+    where
+        S: MiddlewareView,
+    {
+        let cancellations = state.middleware().cancellations().take();
+        for cancellation in cancellations {
+            let call = cancellation.call.as_call();
+            Self::after(state, &call, cancellation.frames, Outcome::Cancelled);
+        }
     }
 
     pub(crate) fn before(
@@ -173,12 +229,36 @@ impl<S: 'static> ChainBuilder<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Call, Chain, Completion, Denied, Direction, Layer, Outcome};
+    use std::sync::Arc;
 
-    #[derive(Default)]
+    use crate::{
+        Call, Chain, Completion, Denied, Direction, InvocationContext, Layer, MiddlewareCtx,
+        MiddlewareView, Outcome,
+    };
+
     struct State {
+        middleware: Option<MiddlewareCtx<Self>>,
         events: Vec<String>,
         body_runs: usize,
+    }
+
+    impl State {
+        fn new(chain: &Arc<Chain<Self>>) -> Self {
+            Self {
+                middleware: Some(MiddlewareCtx::new(
+                    Arc::clone(chain),
+                    InvocationContext::new("test"),
+                )),
+                events: Vec::new(),
+                body_runs: 0,
+            }
+        }
+    }
+
+    impl MiddlewareView for State {
+        fn middleware(&mut self) -> &mut MiddlewareCtx<Self> {
+            self.middleware.as_mut().unwrap()
+        }
     }
 
     struct RecordingLayer {
@@ -228,7 +308,7 @@ mod tests {
                 deny: false,
             })
             .build();
-        let mut state = State::default();
+        let mut state = State::new(&chain);
 
         let value = chain
             .dispatch(&mut state, &call(chain.next_id()), |state| {
@@ -270,7 +350,7 @@ mod tests {
                 deny: false,
             })
             .build();
-        let mut state = State::default();
+        let mut state = State::new(&chain);
 
         let error = chain
             .dispatch(&mut state, &call(chain.next_id()), |state| {
@@ -308,7 +388,7 @@ mod tests {
                 deny: false,
             })
             .build();
-        let mut state = State::default();
+        let mut state = State::new(&chain);
 
         let error = chain
             .dispatch::<()>(&mut state, &call(chain.next_id()), |state| {

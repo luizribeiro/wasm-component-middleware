@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Chain;
+use crate::chain::CancellationQueue;
 
 type Extensions = HashMap<TypeId, Box<dyn Any + Send + Sync>>;
 
@@ -64,12 +65,17 @@ impl InvocationContext {
 pub struct MiddlewareCtx<S> {
     chain: Arc<Chain<S>>,
     context: InvocationContext,
+    cancellations: CancellationQueue<S>,
 }
 
 impl<S> MiddlewareCtx<S> {
     /// Combines a per-instance chain with invocation metadata.
     pub fn new(chain: Arc<Chain<S>>, context: InvocationContext) -> Self {
-        Self { chain, context }
+        Self {
+            chain,
+            context,
+            cancellations: CancellationQueue::default(),
+        }
     }
 
     /// Returns the chain used to route calls for this store.
@@ -87,6 +93,10 @@ impl<S> MiddlewareCtx<S> {
     /// Returns mutable invocation metadata and policy state.
     pub fn context_mut(&mut self) -> &mut InvocationContext {
         &mut self.context
+    }
+
+    pub(crate) fn cancellations(&self) -> CancellationQueue<S> {
+        self.cancellations.clone()
     }
 }
 

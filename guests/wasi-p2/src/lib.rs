@@ -113,6 +113,14 @@ impl Guest for Component {
     fn exit_code() {
         wasi::cli::exit::exit_with_code(7);
     }
+
+    fn common_calls() {
+        let _ = wasi::cli::environment::get_environment();
+        let _ = wasi::cli::environment::get_arguments();
+        let _ = wasi::cli::terminal_stdin::get_terminal_stdin();
+        let _ = wasi::cli::terminal_stdout::get_terminal_stdout();
+        let _ = wasi::cli::terminal_stderr::get_terminal_stderr();
+    }
 }
 
 export!(Component);

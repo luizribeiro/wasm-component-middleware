@@ -7,4 +7,5 @@ world workload {
     export exercise: func() -> string;
   export exit-success: func();
   export exit-code: func();
+  export common-calls: func();
 }

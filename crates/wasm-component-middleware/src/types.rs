@@ -3,6 +3,9 @@ use std::fmt::{self, Display};
 
 static EMPTY_ARGUMENTS: Arguments = Arguments(Vec::new());
 
+/// Maximum number of bytes retained for a byte-list argument snapshot.
+pub const BYTE_ARGUMENT_PREFIX_LEN: usize = 64;
+
 /// Identifies which side of the component boundary initiated a call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Direction {
@@ -39,6 +42,43 @@ pub struct Call<'a> {
     pub handles: &'a [u32],
     /// A typed, read-only view of the call's non-resource arguments.
     pub args: &'a Arguments,
+}
+
+#[derive(Debug)]
+pub(crate) struct OwnedCall {
+    id: u64,
+    direction: Direction,
+    interface: Option<String>,
+    version: Option<String>,
+    function: String,
+    handles: Vec<u32>,
+    args: Arguments,
+}
+
+impl OwnedCall {
+    pub(crate) fn from_call(call: &Call<'_>) -> Self {
+        Self {
+            id: call.id,
+            direction: call.direction,
+            interface: call.interface.map(str::to_owned),
+            version: call.version.map(str::to_owned),
+            function: call.function.to_owned(),
+            handles: call.handles.to_vec(),
+            args: call.args.clone(),
+        }
+    }
+
+    pub(crate) fn as_call(&self) -> Call<'_> {
+        Call {
+            id: self.id,
+            direction: self.direction,
+            interface: self.interface.as_deref(),
+            version: self.version.as_deref(),
+            function: &self.function,
+            handles: &self.handles,
+            args: &self.args,
+        }
+    }
 }
 
 impl<'a> Call<'a> {
@@ -164,8 +204,13 @@ pub enum ArgumentValue {
     Unsigned(u64),
     /// A string value.
     String(String),
-    /// A byte list, kept compact for inspection and logging.
-    Bytes(Vec<u8>),
+    /// A byte list represented by a bounded prefix and its original length.
+    Bytes {
+        /// The first at most [`BYTE_ARGUMENT_PREFIX_LEN`] bytes.
+        prefix: Vec<u8>,
+        /// The byte list's original length.
+        total_len: usize,
+    },
     /// A list of component values.
     List(Vec<Self>),
     /// A variant case with an optional payload.
@@ -180,10 +225,21 @@ pub enum ArgumentValue {
 }
 
 impl ArgumentValue {
-    /// Creates a byte-list value.
+    /// Creates a bounded byte-list snapshot.
+    ///
+    /// At most [`BYTE_ARGUMENT_PREFIX_LEN`] bytes are copied, while
+    /// [`Self::byte_len`] reports the original length.
     #[must_use]
-    pub fn bytes(value: impl Into<Vec<u8>>) -> Self {
-        Self::Bytes(value.into())
+    pub fn bytes(value: impl AsRef<[u8]>) -> Self {
+        let value = value.as_ref();
+        Self::Bytes {
+            prefix: value
+                .iter()
+                .take(BYTE_ARGUMENT_PREFIX_LEN)
+                .copied()
+                .collect(),
+            total_len: value.len(),
+        }
     }
 
     /// Creates a variant case without a payload.
@@ -201,11 +257,20 @@ impl ArgumentValue {
         }
     }
 
-    /// Returns this value as bytes when it has byte-list type.
+    /// Returns the retained byte prefix when this value has byte-list type.
     #[must_use]
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
-            Self::Bytes(value) => Some(value),
+            Self::Bytes { prefix, .. } => Some(prefix),
+            _ => None,
+        }
+    }
+
+    /// Returns the original byte-list length when this value has byte-list type.
+    #[must_use]
+    pub const fn byte_len(&self) -> Option<usize> {
+        match self {
+            Self::Bytes { total_len, .. } => Some(*total_len),
             _ => None,
         }
     }
@@ -227,9 +292,9 @@ impl Display for ArgumentValue {
             Self::Signed(value) => Display::fmt(value, formatter),
             Self::Unsigned(value) => Display::fmt(value, formatter),
             Self::String(value) => write!(formatter, "{value:?}"),
-            Self::Bytes(value) => {
+            Self::Bytes { prefix, total_len } => {
                 const PREVIEW: usize = 24;
-                let preview = value
+                let preview = prefix
                     .iter()
                     .take(PREVIEW)
                     .map(|byte| match byte {
@@ -237,8 +302,8 @@ impl Display for ArgumentValue {
                         _ => '.',
                     })
                     .collect::<String>();
-                let ellipsis = if value.len() > PREVIEW { "…" } else { "" };
-                write!(formatter, "{} bytes \"{preview}{ellipsis}\"", value.len())
+                let ellipsis = if *total_len > PREVIEW { "…" } else { "" };
+                write!(formatter, "{total_len} bytes \"{preview}{ellipsis}\"")
             }
             Self::List(values) => {
                 formatter.write_str("[")?;
@@ -309,6 +374,10 @@ pub enum Outcome<'a> {
     /// The body or an inner layer returned an error.
     Failed(&'a wasmtime::Error),
     /// The asynchronous body was dropped before it completed.
+    ///
+    /// An `after` hook sees this outcome once the store is next available, so
+    /// delivery can happen later than the future's drop. If the store is
+    /// dropped first, the hook is not called.
     Cancelled,
 }
 
@@ -359,13 +428,13 @@ pub trait Layer<S>: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArgumentValue, Arguments, Denied};
+    use super::{ArgumentValue, Arguments, BYTE_ARGUMENT_PREFIX_LEN, Denied};
 
     #[test]
     fn typed_arguments_support_policy_lookup() {
         let args = Arguments::new()
             .with("path", "config/settings.toml")
-            .with("bytes", ArgumentValue::bytes(b"hello".to_vec()));
+            .with("bytes", ArgumentValue::bytes(b"hello"));
 
         assert_eq!(
             args.get("path").and_then(ArgumentValue::as_str),
@@ -375,6 +444,17 @@ mod tests {
             args.get("bytes").and_then(ArgumentValue::as_bytes),
             Some(b"hello".as_slice())
         );
+    }
+
+    #[test]
+    fn byte_arguments_retain_a_bounded_prefix_and_total_length() {
+        let bytes = (0..BYTE_ARGUMENT_PREFIX_LEN + 17)
+            .map(|value| u8::try_from(value % 256).unwrap())
+            .collect::<Vec<_>>();
+        let value = ArgumentValue::bytes(&bytes);
+
+        assert_eq!(value.as_bytes(), Some(&bytes[..BYTE_ARGUMENT_PREFIX_LEN]));
+        assert_eq!(value.byte_len(), Some(bytes.len()));
     }
 
     #[test]

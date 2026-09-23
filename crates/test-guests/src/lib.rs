@@ -35,6 +35,12 @@ pub fn wasi_p2() -> &'static Path {
     Path::new(env!("WASI_P2_COMPONENT"))
 }
 
+/// Returns the path to the guest that exercises concurrent Preview 3 calls.
+#[must_use]
+pub fn wasi_p3() -> &'static Path {
+    Path::new(env!("WASI_P3_COMPONENT"))
+}
+
 #[cfg(test)]
 mod tests {
     use wasmtime::component::{Component, Linker, ResourceTable};

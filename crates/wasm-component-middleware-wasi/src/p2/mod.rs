@@ -3,6 +3,8 @@ mod clocks;
 mod gate;
 mod io;
 
+pub(super) const WASI_VERSION: &str = "0.2.12";
+
 use wasm_component_middleware::MiddlewareView;
 use wasm_component_middleware::RoutedInterface;
 use wasmtime::component::Linker;

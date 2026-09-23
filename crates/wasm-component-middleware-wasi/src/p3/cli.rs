@@ -1,15 +1,26 @@
 use wasm_component_middleware::MiddlewareView;
-use wasmtime::component::{Linker, Resource};
+use wasmtime::AsContextMut;
+use wasmtime::component::{Access, FutureReader, Linker, Resource, StreamReader};
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi::cli::WasiCliView;
-use wasmtime_wasi::p2::bindings::cli::{
+use wasmtime_wasi::cli::{WasiCli, WasiCliView};
+use wasmtime_wasi::p3::bindings::cli::{
     environment, exit, stderr, stdin, stdout, terminal_input, terminal_output, terminal_stderr,
-    terminal_stdin, terminal_stdout,
+    terminal_stdin, terminal_stdout, types,
 };
-use wasmtime_wasi::p2::{DynInputStream, DynOutputStream};
+use wasmtime_wasi::p3::cli::{TerminalInput, TerminalOutput};
+
+use crate::gate::{Gate, GateData, gate, project};
 
 use super::WASI_VERSION;
-use super::gate::{Gate, GateData, gate, project};
+
+fn delegate_access<'a, T>(store: &'a mut Access<'_, T, GateData<T>>) -> Access<'a, T, WasiCli>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    Access::new(store.as_context_mut(), |state: &mut T| state.cli())
+}
+
+impl<T> types::Host for Gate<'_, T> where T: WasiView + MiddlewareView + 'static {}
 
 impl<T> environment::Host for Gate<'_, T>
 where
@@ -23,8 +34,8 @@ where
         gate!(trap self, WASI_VERSION, "wasi:cli/environment", "get-arguments", handles = [], args = (), delegate = |state: &mut T| environment::Host::get_arguments(&mut state.cli()))
     }
 
-    fn initial_cwd(&mut self) -> wasmtime::Result<Option<String>> {
-        gate!(trap self, WASI_VERSION, "wasi:cli/environment", "initial-cwd", handles = [], args = (), delegate = |state: &mut T| environment::Host::initial_cwd(&mut state.cli()))
+    fn get_initial_cwd(&mut self) -> wasmtime::Result<Option<String>> {
+        gate!(trap self, WASI_VERSION, "wasi:cli/environment", "get-initial-cwd", handles = [], args = (), delegate = |state: &mut T| environment::Host::get_initial_cwd(&mut state.cli()))
     }
 }
 
@@ -41,30 +52,44 @@ where
     }
 }
 
-impl<T> stdin::Host for Gate<'_, T>
+impl<T> stdin::Host for Gate<'_, T> where T: WasiView + MiddlewareView + 'static {}
+
+impl<T> stdin::HostWithStore<T> for GateData<T>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    fn get_stdin(&mut self) -> wasmtime::Result<Resource<DynInputStream>> {
-        gate!(trap self, WASI_VERSION, "wasi:cli/stdin", "get-stdin", handles = [], args = (), delegate = |state: &mut T| stdin::Host::get_stdin(&mut state.cli()), produced = |value: &Resource<DynInputStream>| vec![value.rep()])
+    fn read_via_stream(
+        mut store: Access<T, Self>,
+    ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
+        gate!(access store, "wasi:cli/stdin", "read-via-stream", handles = [], args = (), delegate = |store| stdin::HostWithStore::read_via_stream(delegate_access(store)))
     }
 }
 
-impl<T> stdout::Host for Gate<'_, T>
+impl<T> stdout::Host for Gate<'_, T> where T: WasiView + MiddlewareView + 'static {}
+
+impl<T> stdout::HostWithStore<T> for GateData<T>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    fn get_stdout(&mut self) -> wasmtime::Result<Resource<DynOutputStream>> {
-        gate!(trap self, WASI_VERSION, "wasi:cli/stdout", "get-stdout", handles = [], args = (), delegate = |state: &mut T| stdout::Host::get_stdout(&mut state.cli()), produced = |value: &Resource<DynOutputStream>| vec![value.rep()])
+    fn write_via_stream(
+        mut store: Access<'_, T, Self>,
+        data: StreamReader<u8>,
+    ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
+        gate!(access store, "wasi:cli/stdout", "write-via-stream", handles = [], args = (), delegate = |store| stdout::HostWithStore::write_via_stream(delegate_access(store), data))
     }
 }
 
-impl<T> stderr::Host for Gate<'_, T>
+impl<T> stderr::Host for Gate<'_, T> where T: WasiView + MiddlewareView + 'static {}
+
+impl<T> stderr::HostWithStore<T> for GateData<T>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    fn get_stderr(&mut self) -> wasmtime::Result<Resource<DynOutputStream>> {
-        gate!(trap self, WASI_VERSION, "wasi:cli/stderr", "get-stderr", handles = [], args = (), delegate = |state: &mut T| stderr::Host::get_stderr(&mut state.cli()), produced = |value: &Resource<DynOutputStream>| vec![value.rep()])
+    fn write_via_stream(
+        mut store: Access<'_, T, Self>,
+        data: StreamReader<u8>,
+    ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
+        gate!(access store, "wasi:cli/stderr", "write-via-stream", handles = [], args = (), delegate = |store| stderr::HostWithStore::write_via_stream(delegate_access(store), data))
     }
 }
 
@@ -74,7 +99,7 @@ impl<T> terminal_input::HostTerminalInput for Gate<'_, T>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    fn drop(&mut self, terminal: Resource<terminal_input::TerminalInput>) -> wasmtime::Result<()> {
+    fn drop(&mut self, terminal: Resource<TerminalInput>) -> wasmtime::Result<()> {
         gate!(trap self, WASI_VERSION, "wasi:cli/terminal-input", "[resource-drop]terminal-input", handles = [terminal], args = (), delegate = |state: &mut T| terminal_input::HostTerminalInput::drop(&mut state.cli(), terminal))
     }
 }
@@ -85,10 +110,7 @@ impl<T> terminal_output::HostTerminalOutput for Gate<'_, T>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    fn drop(
-        &mut self,
-        terminal: Resource<terminal_output::TerminalOutput>,
-    ) -> wasmtime::Result<()> {
+    fn drop(&mut self, terminal: Resource<TerminalOutput>) -> wasmtime::Result<()> {
         gate!(trap self, WASI_VERSION, "wasi:cli/terminal-output", "[resource-drop]terminal-output", handles = [terminal], args = (), delegate = |state: &mut T| terminal_output::HostTerminalOutput::drop(&mut state.cli(), terminal))
     }
 }
@@ -97,10 +119,8 @@ impl<T> terminal_stdin::Host for Gate<'_, T>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    fn get_terminal_stdin(
-        &mut self,
-    ) -> wasmtime::Result<Option<Resource<terminal_input::TerminalInput>>> {
-        gate!(trap self, WASI_VERSION, "wasi:cli/terminal-stdin", "get-terminal-stdin", handles = [], args = (), delegate = |state: &mut T| terminal_stdin::Host::get_terminal_stdin(&mut state.cli()), produced = |value: &Option<Resource<terminal_input::TerminalInput>>| value.as_ref().map(Resource::rep).into_iter().collect())
+    fn get_terminal_stdin(&mut self) -> wasmtime::Result<Option<Resource<TerminalInput>>> {
+        gate!(trap self, WASI_VERSION, "wasi:cli/terminal-stdin", "get-terminal-stdin", handles = [], args = (), delegate = |state: &mut T| terminal_stdin::Host::get_terminal_stdin(&mut state.cli()), produced = |value: &Option<Resource<TerminalInput>>| value.as_ref().map(Resource::rep).into_iter().collect())
     }
 }
 
@@ -108,10 +128,8 @@ impl<T> terminal_stdout::Host for Gate<'_, T>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    fn get_terminal_stdout(
-        &mut self,
-    ) -> wasmtime::Result<Option<Resource<terminal_output::TerminalOutput>>> {
-        gate!(trap self, WASI_VERSION, "wasi:cli/terminal-stdout", "get-terminal-stdout", handles = [], args = (), delegate = |state: &mut T| terminal_stdout::Host::get_terminal_stdout(&mut state.cli()), produced = |value: &Option<Resource<terminal_output::TerminalOutput>>| value.as_ref().map(Resource::rep).into_iter().collect())
+    fn get_terminal_stdout(&mut self) -> wasmtime::Result<Option<Resource<TerminalOutput>>> {
+        gate!(trap self, WASI_VERSION, "wasi:cli/terminal-stdout", "get-terminal-stdout", handles = [], args = (), delegate = |state: &mut T| terminal_stdout::Host::get_terminal_stdout(&mut state.cli()), produced = |value: &Option<Resource<TerminalOutput>>| value.as_ref().map(Resource::rep).into_iter().collect())
     }
 }
 
@@ -119,10 +137,8 @@ impl<T> terminal_stderr::Host for Gate<'_, T>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    fn get_terminal_stderr(
-        &mut self,
-    ) -> wasmtime::Result<Option<Resource<terminal_output::TerminalOutput>>> {
-        gate!(trap self, WASI_VERSION, "wasi:cli/terminal-stderr", "get-terminal-stderr", handles = [], args = (), delegate = |state: &mut T| terminal_stderr::Host::get_terminal_stderr(&mut state.cli()), produced = |value: &Option<Resource<terminal_output::TerminalOutput>>| value.as_ref().map(Resource::rep).into_iter().collect())
+    fn get_terminal_stderr(&mut self) -> wasmtime::Result<Option<Resource<TerminalOutput>>> {
+        gate!(trap self, WASI_VERSION, "wasi:cli/terminal-stderr", "get-terminal-stderr", handles = [], args = (), delegate = |state: &mut T| terminal_stderr::Host::get_terminal_stderr(&mut state.cli()), produced = |value: &Option<Resource<TerminalOutput>>| value.as_ref().map(Resource::rep).into_iter().collect())
     }
 }
 
@@ -130,6 +146,7 @@ pub(super) fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     T: WasiView + MiddlewareView + 'static,
 {
+    types::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     environment::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     exit::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     stdin::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;

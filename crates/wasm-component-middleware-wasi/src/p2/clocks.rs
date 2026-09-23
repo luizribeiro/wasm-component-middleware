@@ -5,6 +5,7 @@ use wasmtime_wasi::clocks::WasiClocksView;
 use wasmtime_wasi::p2::DynPollable;
 use wasmtime_wasi::p2::bindings::clocks::{monotonic_clock, wall_clock};
 
+use super::WASI_VERSION;
 use super::gate::{Gate, GateData, gate, project};
 
 impl<T> wall_clock::Host for Gate<'_, T>
@@ -12,11 +13,11 @@ where
     T: WasiView + MiddlewareView + 'static,
 {
     fn now(&mut self) -> wasmtime::Result<wall_clock::Datetime> {
-        gate!(trap self, "wasi:clocks/wall-clock", "now", handles = [], args = (), delegate = |state: &mut T| wall_clock::Host::now(&mut state.clocks()))
+        gate!(trap self, WASI_VERSION, "wasi:clocks/wall-clock", "now", handles = [], args = (), delegate = |state: &mut T| wall_clock::Host::now(&mut state.clocks()))
     }
 
     fn resolution(&mut self) -> wasmtime::Result<wall_clock::Datetime> {
-        gate!(trap self, "wasi:clocks/wall-clock", "resolution", handles = [], args = (), delegate = |state: &mut T| wall_clock::Host::resolution(&mut state.clocks()))
+        gate!(trap self, WASI_VERSION, "wasi:clocks/wall-clock", "resolution", handles = [], args = (), delegate = |state: &mut T| wall_clock::Host::resolution(&mut state.clocks()))
     }
 }
 
@@ -25,25 +26,25 @@ where
     T: WasiView + MiddlewareView + 'static,
 {
     fn now(&mut self) -> wasmtime::Result<monotonic_clock::Instant> {
-        gate!(trap self, "wasi:clocks/monotonic-clock", "now", handles = [], args = (), delegate = |state: &mut T| monotonic_clock::Host::now(&mut state.clocks()))
+        gate!(trap self, WASI_VERSION, "wasi:clocks/monotonic-clock", "now", handles = [], args = (), delegate = |state: &mut T| monotonic_clock::Host::now(&mut state.clocks()))
     }
 
     fn resolution(&mut self) -> wasmtime::Result<monotonic_clock::Instant> {
-        gate!(trap self, "wasi:clocks/monotonic-clock", "resolution", handles = [], args = (), delegate = |state: &mut T| monotonic_clock::Host::resolution(&mut state.clocks()))
+        gate!(trap self, WASI_VERSION, "wasi:clocks/monotonic-clock", "resolution", handles = [], args = (), delegate = |state: &mut T| monotonic_clock::Host::resolution(&mut state.clocks()))
     }
 
     fn subscribe_instant(
         &mut self,
         when: monotonic_clock::Instant,
     ) -> wasmtime::Result<Resource<DynPollable>> {
-        gate!(trap self, "wasi:clocks/monotonic-clock", "subscribe-instant", handles = [], args = [when = when], delegate = |state: &mut T| monotonic_clock::Host::subscribe_instant(&mut state.clocks(), when), produced = |value: &Resource<DynPollable>| vec![value.rep()])
+        gate!(trap self, WASI_VERSION, "wasi:clocks/monotonic-clock", "subscribe-instant", handles = [], args = [when = when], delegate = |state: &mut T| monotonic_clock::Host::subscribe_instant(&mut state.clocks(), when), produced = |value: &Resource<DynPollable>| vec![value.rep()])
     }
 
     fn subscribe_duration(
         &mut self,
         duration: monotonic_clock::Duration,
     ) -> wasmtime::Result<Resource<DynPollable>> {
-        gate!(trap self, "wasi:clocks/monotonic-clock", "subscribe-duration", handles = [], args = [duration = duration], delegate = |state: &mut T| monotonic_clock::Host::subscribe_duration(&mut state.clocks(), duration), produced = |value: &Resource<DynPollable>| vec![value.rep()])
+        gate!(trap self, WASI_VERSION, "wasi:clocks/monotonic-clock", "subscribe-duration", handles = [], args = [duration = duration], delegate = |state: &mut T| monotonic_clock::Host::subscribe_duration(&mut state.clocks(), duration), produced = |value: &Resource<DynPollable>| vec![value.rep()])
     }
 }
 

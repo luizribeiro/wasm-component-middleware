@@ -253,10 +253,7 @@ mod tests {
                 InvocationContext::new("greeter"),
             )),
         };
-        let args = Arguments::new().with(
-            "message",
-            ArgumentValue::bytes(b"Hello, middleware!".to_vec()),
-        );
+        let args = Arguments::new().with("message", ArgumentValue::bytes(b"Hello, middleware!"));
         let call = Call::new(chain.next_id(), Direction::Export, "greet").with_args(&args);
 
         chain

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use wasm_component_middleware::{
     Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView, Outcome, Routed,
-    route_export, route_imports,
+    route_export, route_imports, verify_routing,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{AsContextMut, Engine, Store};
@@ -60,7 +60,7 @@ impl example::hello::host::Host for State {
 }
 
 route_imports! {
-    example::hello::host::Host => State as "example:hello/host" {
+    const HELLO_HOST: example::hello::host::Host => State as "example:hello/host" {
         fn user_name(&mut self) -> wasmtime::Result<String>;
         fn log(&mut self, message: String) -> wasmtime::Result<()>;
     }
@@ -111,6 +111,7 @@ fn invoke(chain: Chain<State>, user_name: UserName) -> wasmtime::Result<String> 
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
     example::hello::host::add_to_linker::<_, Routed<State>>(&mut linker, Routed::<State>::get)?;
+    verify_routing(&engine, &component, [HELLO_HOST], ["wasi:"])?;
     let mut store = Store::new(
         &engine,
         State {
@@ -125,6 +126,40 @@ fn invoke(chain: Chain<State>, user_name: UserName) -> wasmtime::Result<String> 
     route_export(store.as_context_mut(), None, "greet", &"Hello", |store| {
         hello.call_greet(store, "Hello")
     })
+}
+
+#[test]
+fn hello_imports_are_routed() {
+    let engine = Engine::default();
+    let component = Component::from_file(&engine, test_guests::hello()).unwrap();
+    let mut linker = Linker::<State>::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker).unwrap();
+    example::hello::host::add_to_linker::<_, Routed<State>>(&mut linker, Routed::<State>::get)
+        .unwrap();
+
+    verify_routing(&engine, &component, [HELLO_HOST], ["wasi:"]).unwrap();
+}
+
+#[test]
+fn unrouted_import_is_named_before_instantiation() {
+    let engine = Engine::default();
+    let component = Component::from_file(&engine, test_guests::unrouted_import()).unwrap();
+    let error = verify_routing(&engine, &component, [HELLO_HOST], ["wasi:"]).unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        concat!(
+            "imports example:unrouted/host.secret, example:unrouted/host.classified ",
+            "are not routed through the middleware chain"
+        )
+    );
+    assert_eq!(
+        error.functions(),
+        [
+            "example:unrouted/host.secret",
+            "example:unrouted/host.classified"
+        ]
+    );
 }
 
 #[test]

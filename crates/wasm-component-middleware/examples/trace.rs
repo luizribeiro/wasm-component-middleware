@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use wasm_component_middleware::{
     Chain, InvocationContext, Logger, MiddlewareCtx, MiddlewareView, Routed, route_export,
-    route_imports,
+    route_imports, verify_routing,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{AsContextMut, Engine, Store};
@@ -48,7 +48,7 @@ impl example::hello::host::Host for State {
 }
 
 route_imports! {
-    example::hello::host::Host => State as "example:hello/host" {
+    const HELLO_HOST: example::hello::host::Host => State as "example:hello/host" {
         fn user_name(&mut self) -> wasmtime::Result<String>;
         fn log(&mut self, message: String) -> wasmtime::Result<()>;
     }
@@ -60,6 +60,7 @@ fn main() -> wasmtime::Result<()> {
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
     example::hello::host::add_to_linker::<_, Routed<State>>(&mut linker, Routed::<State>::get)?;
+    verify_routing(&engine, &component, [HELLO_HOST], ["wasi:"])?;
 
     let chain = Arc::new(Chain::builder().layer(Logger::stderr()).build());
     let mut store = Store::new(

@@ -7,6 +7,28 @@ use wasmtime::component::HasData;
 
 use crate::{Call, Completion, Direction, MiddlewareView};
 
+/// Identifies an interface implemented through [`route_imports!`](crate::route_imports).
+///
+/// Pass values emitted by the macro to [`verify_routing`](crate::verify_routing)
+/// before instantiating a component.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct RoutedInterface(&'static str);
+
+impl RoutedInterface {
+    /// Creates the marker emitted by [`route_imports!`](crate::route_imports).
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn from_static(name: &'static str) -> Self {
+        Self(name)
+    }
+
+    /// Returns the canonical WIT interface name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        self.0
+    }
+}
+
 /// The [`HasData`] marker used with a generated `add_to_linker` function.
 ///
 /// Generated host traits are implemented for [`Routing<'_, S>`], then linked
@@ -123,10 +145,12 @@ where
 /// Wasmtime error; for a function whose WIT result has no error case, the
 /// refusal is observed by the guest as a trap. The application's ordinary
 /// implementation of the same host trait remains the body of each call.
+/// The named constant can be passed to [`verify_routing`](crate::verify_routing)
+/// without repeating the interface string.
 #[macro_export]
 macro_rules! route_imports {
     (
-        $host:path => $state:ty as $interface:literal {
+        $visibility:vis const $route:ident: $host:path => $state:ty as $interface:literal {
             $(
                 fn $method:ident(
                     &mut self
@@ -135,6 +159,9 @@ macro_rules! route_imports {
             )*
         }
     ) => {
+        $visibility const $route: $crate::RoutedInterface =
+            $crate::RoutedInterface::from_static($interface);
+
         impl $host for $crate::Routing<'_, $state> {
             $(
                 fn $method(
@@ -198,7 +225,7 @@ mod tests {
     }
 
     crate::route_imports! {
-        TestHost => State as "example:test/host" {
+        const TEST_HOST: TestHost => State as "example:test/host" {
             fn generated_call(&mut self, increment: usize) -> wasmtime::Result<usize>;
         }
     }
@@ -214,6 +241,7 @@ mod tests {
         let second = TestHost::generated_call(&mut Routing::new(&mut state), 1).unwrap();
 
         assert_eq!((first, second), (1, 2));
+        assert_eq!(TEST_HOST.name(), "example:test/host");
     }
 
     #[test]

@@ -34,12 +34,12 @@ impl Display for Unrouted {
 
 impl Error for Unrouted {}
 
-/// Verifies that every checked component import names a routed interface.
+/// Checks component imports against the supplied routed-interface markers.
 ///
-/// Call this after registering real imports with the linker and before
-/// instantiation. `unchecked_prefixes` explicitly exempts imports that are not
-/// routed yet; pass `"wasi:"` until WASI gates make this check strict. Any
-/// The caller should use Wasmtime's
+/// This verifies the declared routing set, not a linker's actual wiring. Gate
+/// dispatch coverage tests should separately prove that each marked interface
+/// is wired through middleware. `unchecked_prefixes` explicitly exempts
+/// imports that are not routed yet. The caller should use Wasmtime's
 /// `Linker::define_unknown_imports_as_traps` after registration as a backstop
 /// for imports that are intentionally unavailable.
 ///

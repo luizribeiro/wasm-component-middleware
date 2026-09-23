@@ -1,5 +1,7 @@
 use std::future::Future;
 
+use wasmtime::component::{Access, Accessor, HasData};
+
 use crate::chain::{ActiveLayers, outcome};
 use crate::{Call, Chain, Completion, Outcome};
 
@@ -9,10 +11,54 @@ use crate::{Call, Chain, Completion, Outcome};
 /// without holding a mutable borrow across an await point.
 pub trait StateAccess<S> {
     /// Runs `operation` with temporary mutable access to the store data.
-    fn with_state<R>(&self, operation: impl FnOnce(&mut S) -> R) -> R;
+    fn with_state<R>(&mut self, operation: impl FnOnce(&mut S) -> R) -> R;
+}
+
+impl<T, D> StateAccess<T> for &Accessor<T, D>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+{
+    fn with_state<R>(&mut self, operation: impl FnOnce(&mut T) -> R) -> R {
+        Accessor::with(self, |mut access| operation(access.data_mut()))
+    }
+}
+
+impl<T, D> StateAccess<T> for Access<'_, T, D>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+{
+    fn with_state<R>(&mut self, operation: impl FnOnce(&mut T) -> R) -> R {
+        operation(self.data_mut())
+    }
 }
 
 impl<S: 'static> Chain<S> {
+    /// Runs a synchronous store-aware body between middleware hooks.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal from a layer or an error from `body`.
+    pub fn dispatch_access<A, R>(
+        &self,
+        mut access: A,
+        call: &Call<'_>,
+        body: impl FnOnce(&mut A) -> wasmtime::Result<(R, Completion)>,
+    ) -> wasmtime::Result<R>
+    where
+        A: StateAccess<S>,
+    {
+        let (frames, denial) = access.with_state(|state| self.before(state, call));
+        let result = match denial {
+            Some(denied) => Err(denied.into()),
+            None => body(&mut access),
+        };
+        let outcome = outcome(result.as_ref().map(|(_, completion)| completion));
+        access.with_state(|state| Self::after(state, call, frames, outcome));
+        result.map(|(value, _)| value)
+    }
+
     /// Runs an asynchronous body between synchronous middleware hooks.
     ///
     /// Dropping the returned future after its body starts runs the active
@@ -23,24 +69,24 @@ impl<S: 'static> Chain<S> {
     /// Returns a refusal from a layer or an error from `body`.
     pub async fn dispatch_async<A, R, F, Fut>(
         &self,
-        access: &A,
+        mut access: A,
         call: &Call<'_>,
         body: F,
     ) -> wasmtime::Result<R>
     where
         A: StateAccess<S>,
-        F: FnOnce(&A) -> Fut,
+        F: FnOnce() -> Fut,
         Fut: Future<Output = wasmtime::Result<(R, Completion)>>,
     {
         let (frames, denial) = access.with_state(|state| self.before(state, call));
         let mut guard = CancellationGuard {
-            access,
+            access: &mut access,
             call,
             frames: Some(frames),
         };
         let result = match denial {
             Some(denied) => Err(denied.into()),
-            None => body(access).await,
+            None => body().await,
         };
         let outcome = outcome(result.as_ref().map(|(_, completion)| completion));
         guard.finish(outcome);
@@ -52,7 +98,7 @@ struct CancellationGuard<'access, 'call, 'data, S: 'static, A>
 where
     A: StateAccess<S>,
 {
-    access: &'access A,
+    access: &'access mut A,
     call: &'call Call<'data>,
     frames: Option<ActiveLayers<S>>,
 }
@@ -95,16 +141,16 @@ mod tests {
 
     struct MemoryAccess(RefCell<State>);
 
-    impl StateAccess<State> for MemoryAccess {
-        fn with_state<R>(&self, operation: impl FnOnce(&mut State) -> R) -> R {
+    impl StateAccess<State> for &MemoryAccess {
+        fn with_state<R>(&mut self, operation: impl FnOnce(&mut State) -> R) -> R {
             operation(&mut self.0.borrow_mut())
         }
     }
 
     struct SendAccess(Mutex<State>);
 
-    impl StateAccess<State> for SendAccess {
-        fn with_state<R>(&self, operation: impl FnOnce(&mut State) -> R) -> R {
+    impl StateAccess<State> for &SendAccess {
+        fn with_state<R>(&mut self, operation: impl FnOnce(&mut State) -> R) -> R {
             operation(&mut self.0.lock().unwrap())
         }
     }
@@ -155,7 +201,7 @@ mod tests {
         let chain = Chain::builder().layer(Observer("observer")).build();
         let access = MemoryAccess(RefCell::new(State::default()));
 
-        let value = run_ready(chain.dispatch_async(&access, &call(), |_| async {
+        let value = run_ready(chain.dispatch_async(&access, &call(), || async {
             Ok((17, Completion { produced: vec![9] }))
         }))
         .unwrap();
@@ -173,7 +219,7 @@ mod tests {
         let access = MemoryAccess(RefCell::new(State::default()));
 
         let error = run_ready(
-            chain.dispatch_async::<_, (), _, _>(&access, &call(), |_| async {
+            chain.dispatch_async::<_, (), _, _>(&access, &call(), || async {
                 Err(wasmtime::Error::msg("body failed"))
             }),
         )
@@ -195,7 +241,7 @@ mod tests {
         }));
         let body_ran = Cell::new(false);
 
-        let error = run_ready(chain.dispatch_async(&access, &call(), |_| async {
+        let error = run_ready(chain.dispatch_async(&access, &call(), || async {
             body_ran.set(true);
             Ok(((), Completion::default()))
         }))
@@ -216,7 +262,7 @@ mod tests {
         let started = Cell::new(false);
         let call = call();
         let mut future = Box::pin(
-            chain.dispatch_async::<_, (), _, _>(&access, &call, |_| async {
+            chain.dispatch_async::<_, (), _, _>(&access, &call, || async {
                 started.set(true);
                 pending().await
             }),
@@ -246,8 +292,8 @@ mod tests {
         let access = SendAccess(Mutex::new(State::default()));
         let call = call();
 
-        assert_send(chain.dispatch_async(&access, &call, |_| async {
-            Ok(((), Completion::default()))
-        }));
+        assert_send(
+            chain.dispatch_async(&access, &call, || async { Ok(((), Completion::default())) }),
+        );
     }
 }

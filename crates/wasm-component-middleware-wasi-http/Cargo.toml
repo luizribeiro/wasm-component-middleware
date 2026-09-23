@@ -8,9 +8,12 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+bytes = "1"
 http.workspace = true
+http-body-util = "0.1"
 hyper.workspace = true
 rustls.workspace = true
+tokio.workspace = true
 wasm-component-middleware = { path = "../wasm-component-middleware", version = "0.0.0" }
 wasm-component-middleware-wasi = { path = "../wasm-component-middleware-wasi", version = "0.0.0" }
 wasmtime.workspace = true
@@ -18,9 +21,10 @@ wasmtime-wasi.workspace = true
 wasmtime-wasi-http.workspace = true
 
 [dev-dependencies]
-bytes = "1"
-http-body-util = "0.1"
-tokio.workspace = true
+test-guests = { path = "../test-guests" }
+wasmtime = { workspace = true, features = ["cranelift"] }
+wit-component = { version = "0.258", features = ["dummy-module"] }
+wit-parser = "0.258"
 
 [lints]
 workspace = true

@@ -1580,12 +1580,15 @@ dependencies = [
  "http-body-util",
  "hyper",
  "rustls",
+ "test-guests",
  "tokio",
  "wasm-component-middleware",
  "wasm-component-middleware-wasi",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+ "wit-component",
+ "wit-parser",
 ]
 
 [[package]]

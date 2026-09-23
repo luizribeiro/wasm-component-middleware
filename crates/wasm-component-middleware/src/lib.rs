@@ -3,6 +3,7 @@
 //! Use this crate to layer host-defined policy and observation over component
 //! imports and exports without bringing in WASI-specific dependencies.
 
+mod allowlist;
 mod async_dispatch;
 mod chain;
 mod context;
@@ -10,6 +11,7 @@ mod logger;
 mod routing;
 mod types;
 
+pub use allowlist::Allowlist;
 pub use async_dispatch::StateAccess;
 pub use chain::{Chain, ChainBuilder};
 pub use context::{InvocationContext, MiddlewareCtx, MiddlewareView};

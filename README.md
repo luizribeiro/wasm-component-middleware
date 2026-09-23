@@ -105,7 +105,44 @@ add_to_linker(&mut linker)?;
 Rust Preview 3 components still import Preview 2 through the standard library,
 so link `wasmtime_wasi::p2::add_to_linker_async` as well. The
 [`wasi-p3` example](crates/wasm-component-middleware-wasi/examples/wasi-p3.rs)
-shows both linker calls and the concurrent export invocation.
+shows both linker calls and the concurrent export invocation. A refusal of
+filesystem `read-via-stream`, `write-via-stream`, `append-via-stream`, or
+`read-directory` traps because those Preview 3 calls have no top-level error
+result.
+
+## Files
+
+Filesystem gates expose paths through `Call::args` and report every descriptor
+in `Completion::produced`, including preopened directories. `OpenFiles` uses
+those descriptors and their resource-drop calls to enforce a per-invocation
+limit:
+
+```rust
+let chain = Chain::builder()
+    .layer(Logger::stderr())
+    .layer(OpenFiles::new(4))
+    .layer(RefusePrivate)
+    .build();
+```
+
+The path policy in the [`sandbox` example](crates/wasm-component-middleware-wasi/examples/sandbox.rs)
+labels the descriptors returned for a private preopen, propagates that label
+through descriptors opened beneath it, and removes labels when descriptors are
+dropped. It refuses path-taking calls based on their handles. Matching path
+strings is incorrect because middleware does not resolve `..` or symlinks the
+way wasmtime-wasi does. Both the descriptor policy and limit become
+`error-code::access` results visible to the guest:
+
+```console
+$ cargo run --example sandbox
+...
+read public/note.txt: hello
+read private/secret.txt: access
+escape from public preopen: access
+open public/one.txt: allowed
+open public/two.txt: allowed
+open public/three.txt: access
+```
 
 ## Refusing calls
 

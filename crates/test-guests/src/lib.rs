@@ -5,6 +5,12 @@
 
 use std::path::Path;
 
+/// Returns the path to the guest that imports host identity and logging.
+#[must_use]
+pub fn hello() -> &'static Path {
+    Path::new(env!("HELLO_COMPONENT"))
+}
+
 /// Returns the path to the synchronous Preview 2 smoke component.
 #[must_use]
 pub fn smoke_p2() -> &'static Path {

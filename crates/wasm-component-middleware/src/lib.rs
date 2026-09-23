@@ -5,6 +5,7 @@
 
 mod allowlist;
 mod async_dispatch;
+mod budget;
 mod chain;
 mod context;
 mod logger;
@@ -14,6 +15,7 @@ mod verification;
 
 pub use allowlist::Allowlist;
 pub use async_dispatch::StateAccess;
+pub use budget::Budget;
 pub use chain::{Chain, ChainBuilder};
 pub use context::{InvocationContext, MiddlewareCtx, MiddlewareView};
 pub use logger::Logger;

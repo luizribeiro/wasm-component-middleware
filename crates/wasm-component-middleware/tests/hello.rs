@@ -5,8 +5,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use wasm_component_middleware::{
-    Arguments, Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView,
-    Outcome, Routed, route_export, route_imports, verify_routing,
+    Arguments, Budget, Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx,
+    MiddlewareView, Outcome, Routed, route_export, route_imports, verify_routing,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{AsContextMut, Engine, Store};
@@ -264,4 +264,25 @@ fn call_ids_are_unique_within_an_invocation() {
 
     assert_eq!(ids.len(), 3);
     assert_eq!(unique.len(), ids.len());
+}
+
+#[test]
+fn one_budget_is_shared_by_two_stores() {
+    let chain = Chain::builder()
+        .layer(Budget::new(1, |call: &Call<'_>| {
+            (call.direction == wasm_component_middleware::Direction::Export
+                && call.function == "greet")
+                .then_some(((), 1))
+        }))
+        .build();
+
+    assert_eq!(
+        invoke(Arc::clone(&chain), UserName::Ada).unwrap(),
+        "Hello, Ada!"
+    );
+    let error = invoke(chain, UserName::Ada).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<Denied>().unwrap().reason(),
+        "budget exhausted"
+    );
 }

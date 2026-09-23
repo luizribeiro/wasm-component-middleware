@@ -4,6 +4,7 @@ mod filesystem;
 mod gate;
 mod io;
 mod random;
+mod sockets;
 
 pub(super) const WASI_VERSION: &str = "0.2.12";
 
@@ -11,7 +12,6 @@ use wasm_component_middleware::MiddlewareView;
 use wasm_component_middleware::RoutedInterface;
 use wasmtime::component::Linker;
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi::sockets::{WasiSockets, WasiSocketsView as _};
 
 /// Interfaces routed by [`add_to_linker_sync`].
 ///
@@ -38,6 +38,13 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
     RoutedInterface::from_static("wasi:random/insecure"),
     RoutedInterface::from_static("wasi:random/insecure-seed"),
     RoutedInterface::from_static("wasi:random/random"),
+    RoutedInterface::from_static("wasi:sockets/instance-network"),
+    RoutedInterface::from_static("wasi:sockets/ip-name-lookup"),
+    RoutedInterface::from_static("wasi:sockets/network"),
+    RoutedInterface::from_static("wasi:sockets/tcp"),
+    RoutedInterface::from_static("wasi:sockets/tcp-create-socket"),
+    RoutedInterface::from_static("wasi:sockets/udp"),
+    RoutedInterface::from_static("wasi:sockets/udp-create-socket"),
 ];
 
 /// Adds synchronous WASI Preview 2 interfaces with middleware gates.
@@ -53,38 +60,32 @@ pub fn add_to_linker_sync<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    add_ungated_to_linker_sync(linker)?;
+    add_to_linker_with_options_sync(
+        linker,
+        &wasmtime_wasi::p2::bindings::sync::LinkOptions::default(),
+    )
+}
+
+/// Adds synchronous WASI Preview 2 interfaces with middleware gates and options.
+///
+/// Use this when enabling unstable WASI functions through Wasmtime's
+/// [`wasmtime_wasi::p2::bindings::sync::LinkOptions`].
+///
+/// # Errors
+///
+/// Returns an error if Wasmtime cannot register an interface.
+pub fn add_to_linker_with_options_sync<T>(
+    linker: &mut Linker<T>,
+    options: &wasmtime_wasi::p2::bindings::sync::LinkOptions,
+) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    sockets::add_link_options_interfaces_to_linker::<T>(linker, options)?;
     cli::add_to_linker::<T>(linker)?;
     clocks::add_to_linker::<T>(linker)?;
     filesystem::add_to_linker::<T>(linker)?;
     io::add_to_linker::<T>(linker)?;
-    random::add_to_linker::<T>(linker)
-}
-
-fn add_ungated_to_linker_sync<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
-where
-    T: WasiView + 'static,
-{
-    use wasmtime_wasi::p2::bindings::sockets;
-
-    let options = wasmtime_wasi::p2::bindings::sync::LinkOptions::default();
-    sockets::tcp_create_socket::add_to_linker::<T, WasiSockets>(linker, T::sockets)?;
-    sockets::instance_network::add_to_linker::<T, WasiSockets>(linker, T::sockets)?;
-    sockets::network::add_to_linker::<T, WasiSockets>(linker, &(&options).into(), T::sockets)?;
-    wasmtime_wasi::p2::bindings::sync::sockets::tcp::add_to_linker::<T, WasiSockets>(
-        linker,
-        T::sockets,
-    )?;
-    wasmtime_wasi::p2::bindings::sync::sockets::udp::add_to_linker::<T, WasiSockets>(
-        linker,
-        T::sockets,
-    )?;
-    wasmtime_wasi::p2::bindings::sync::sockets::udp_create_socket::add_to_linker::<T, WasiSockets>(
-        linker,
-        T::sockets,
-    )?;
-    wasmtime_wasi::p2::bindings::sync::sockets::ip_name_lookup::add_to_linker::<T, WasiSockets>(
-        linker,
-        T::sockets,
-    )
+    random::add_to_linker::<T>(linker)?;
+    sockets::add_to_linker::<T>(linker)
 }

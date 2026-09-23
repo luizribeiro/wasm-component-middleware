@@ -538,7 +538,11 @@ impl Harness {
             .insecure_random(Deterministic::new(vec![9, 10, 11, 12]))
             .insecure_random_seed(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff)
             .wall_clock(FixedWallClock)
-            .monotonic_clock(FixedMonotonicClock);
+            .monotonic_clock(FixedMonotonicClock)
+            .allow_tcp(true)
+            .allow_udp(true)
+            .allow_ip_name_lookup(true)
+            .socket_addr_check(|address, _| Box::pin(async move { address.ip().is_loopback() }));
         let directory = preopen_fixture(&mut builder);
         let mut store = Store::new(
             &engine,
@@ -610,6 +614,26 @@ impl Layer<State> for Refuse {
         } else {
             Ok(())
         }
+    }
+
+    fn after(&self, _state: &mut State, _call: &Call<'_>, (): (), _outcome: Outcome<'_>) {}
+}
+
+#[derive(Clone)]
+struct CaptureAddress(Arc<Mutex<Option<String>>>);
+
+impl Layer<State> for CaptureAddress {
+    type Frame = ();
+
+    fn before(&self, _state: &mut State, call: &Call<'_>) -> Result<(), Denied> {
+        if call.function == "[method]tcp-socket.start-connect" {
+            *self.0.lock().unwrap() = call
+                .args
+                .get("remote_address")
+                .and_then(ArgumentValue::as_str)
+                .map(str::to_owned);
+        }
+        Ok(())
     }
 
     fn after(&self, _state: &mut State, _call: &Call<'_>, (): (), _outcome: Outcome<'_>) {}
@@ -813,6 +837,29 @@ fn refusing_random_traps_the_guest() {
     assert_eq!(
         error.downcast_ref::<Denied>().unwrap().reason(),
         "get-random-u64 is disabled"
+    );
+}
+
+#[test]
+fn refusing_tcp_connect_returns_access_and_exposes_the_address() {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let address = Arc::new(Mutex::new(None));
+    let chain = Chain::builder()
+        .layer(CaptureAddress(Arc::clone(&address)))
+        .layer(Refuse("[method]tcp-socket.start-connect"))
+        .build();
+    let mut harness = Harness::new(true, chain).unwrap();
+
+    assert!(
+        harness
+            .guest
+            .call_socket_denial(&mut harness.store, port)
+            .unwrap()
+    );
+    assert_eq!(
+        address.lock().unwrap().as_deref(),
+        Some(format!("127.0.0.1:{port}").as_str())
     );
 }
 

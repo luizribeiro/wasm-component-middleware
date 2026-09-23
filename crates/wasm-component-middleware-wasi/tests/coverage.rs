@@ -2,11 +2,14 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use wasm_component_middleware::{
-    Chain, InvocationContext, MiddlewareCtx, MiddlewareView, verify_routing,
+    Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView, Outcome,
+    verify_routing,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
-use wasmtime::{Config, Engine};
+use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
 use wit_parser::{ManglingAndAbi, Resolve};
@@ -78,21 +81,11 @@ fn all_p3_imports_component(engine: &Engine) -> Component {
 
 #[test]
 fn only_later_interfaces_are_unrouted() {
-    const ALLOWED_MISSING: &[&str] = &[
-        "wasi:sockets/instance-network",
-        "wasi:sockets/ip-name-lookup",
-        "wasi:sockets/network",
-        "wasi:sockets/tcp",
-        "wasi:sockets/tcp-create-socket",
-        "wasi:sockets/udp",
-        "wasi:sockets/udp-create-socket",
-    ];
-
     let engine = Engine::default();
     let component = all_imports_component(&engine);
     let mut linker = Linker::<State>::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker).unwrap();
-    let error = verify_routing(
+    verify_routing(
         &engine,
         &component,
         wasm_component_middleware_wasi::p2::ROUTED_INTERFACES
@@ -100,15 +93,7 @@ fn only_later_interfaces_are_unrouted() {
             .copied(),
         [],
     )
-    .unwrap_err();
-
-    let actual = error
-        .functions()
-        .iter()
-        .map(|function| function.split_once('@').unwrap().0)
-        .collect::<BTreeSet<_>>();
-    let expected = ALLOWED_MISSING.iter().copied().collect::<BTreeSet<_>>();
-    assert_eq!(actual, expected, "{error}");
+    .unwrap();
 }
 
 #[test]
@@ -153,6 +138,45 @@ fn linker_still_rejects_duplicate_definitions() {
 }
 
 #[test]
+fn network_error_conversion_requires_the_option_and_reaches_the_chain() {
+    let engine = Engine::default();
+    let component = Component::from_file(&engine, test_guests::network_error_code()).unwrap();
+    let mut default_linker = Linker::<State>::new(&engine);
+    wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut default_linker).unwrap();
+    let chain = Chain::builder().build();
+    let mut store = Store::new(&engine, state(&chain));
+
+    let error = default_linker
+        .instantiate(&mut store, &component)
+        .unwrap_err();
+
+    assert!(
+        error.to_string().contains("wasi:sockets/network"),
+        "{error}"
+    );
+
+    let reached = Arc::new(AtomicBool::new(false));
+    let chain = Chain::builder()
+        .layer(ObserveNetworkErrorCode(Arc::clone(&reached)))
+        .build();
+    let mut linker = Linker::<State>::new(&engine);
+    let mut options = wasmtime_wasi::p2::bindings::sync::LinkOptions::default();
+    options.network_error_code(true);
+    wasm_component_middleware_wasi::p2::add_to_linker_with_options_sync(&mut linker, &options)
+        .unwrap();
+    let mut store = Store::new(&engine, state(&chain));
+    let instance = linker.instantiate(&mut store, &component).unwrap();
+    let probe = instance
+        .get_typed_func::<(), (bool,)>(&mut store, "probe")
+        .unwrap();
+
+    let (converted,) = probe.call(&mut store, ()).unwrap();
+
+    assert!(converted);
+    assert!(reached.load(Ordering::Relaxed));
+}
+
+#[test]
 fn p3_linker_still_rejects_duplicate_definitions() {
     let mut config = Config::new();
     config.wasm_component_model_async(true);
@@ -166,11 +190,32 @@ fn p3_linker_still_rejects_duplicate_definitions() {
     assert!(error.to_string().contains("defined twice"), "{error}");
 }
 
-#[allow(dead_code)]
-fn state() -> State {
+#[derive(Clone)]
+struct ObserveNetworkErrorCode(Arc<AtomicBool>);
+
+impl Layer<State> for ObserveNetworkErrorCode {
+    type Frame = ();
+
+    fn before(&self, _state: &mut State, call: &Call<'_>) -> Result<(), Denied> {
+        match call.function {
+            "[method]output-stream.blocking-write-and-flush" => {
+                Err(Denied::new("create a stream error"))
+            }
+            "network-error-code" => {
+                self.0.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn after(&self, _state: &mut State, _call: &Call<'_>, (): (), _outcome: Outcome<'_>) {}
+}
+
+fn state(chain: &Arc<Chain<State>>) -> State {
     State {
         middleware: Some(MiddlewareCtx::new(
-            Chain::builder().build(),
+            Arc::clone(chain),
             InvocationContext::new("coverage"),
         )),
         table: ResourceTable::new(),

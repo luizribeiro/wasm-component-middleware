@@ -4,3 +4,11 @@ package wasmtime:wasi;
 world bindings {
   include wasi:cli/imports@0.2.12;
 }
+
+world network-error-code-probe {
+  import wasi:cli/stdout@0.2.12;
+  import wasi:io/streams@0.2.12;
+  import wasi:sockets/network@0.2.12;
+
+  export probe: func() -> bool;
+}

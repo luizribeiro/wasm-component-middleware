@@ -37,6 +37,24 @@ where
 
 macro_rules! gate {
     (
+        socket $gate:ident, $version:expr, $interface:literal, $function:literal,
+        handles = [$($handle:expr),* $(,)?], args = $args:tt,
+        delegate = $delegate:expr $(, produced = $produced:expr)?
+    ) => {{
+        let result = gate!(
+            trap $gate, $version, $interface, $function,
+            handles = [$($handle),*], args = $args,
+            delegate = $delegate $(, produced = $produced)?
+        );
+        result.map_err(|error| match error.downcast::<wasm_component_middleware::Denied>() {
+            Ok(_) => wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::AccessDenied.into(),
+            Err(error) => match error.downcast::<wasmtime_wasi::p2::SocketError>() {
+                Ok(error) => error,
+                Err(error) => wasmtime_wasi::p2::SocketError::trap(error),
+            },
+        })
+    }};
+    (
         filesystem $gate:ident, $version:expr, $interface:literal, $function:literal,
         handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr, denied = $denied:expr, wrapper = $wrapper:ty

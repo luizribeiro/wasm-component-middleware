@@ -104,11 +104,12 @@ impl Guest for Component {
         let insecure_u64 = wasi::random::insecure::get_insecure_random_u64();
         let insecure_seed = wasi::random::insecure_seed::insecure_seed();
         let filesystem = exercise_filesystem();
+        let sockets = exercise_sockets();
         drop(input_pollable);
         drop(output_pollable);
 
         format!(
-            "{environment:?}|{arguments:?}|{initial_cwd:?}|{}:{}|{}:{}|{instant}|{instant_resolution}|{instant_ready}|{clock_poll:?}|{read:?}|{blocking_read:?}|{skipped}|{blocking_skipped}|{input_ready}|{write_permit}|{output_ready}|{spliced}|{blocking_spliced}|{terminal_stdin}|{terminal_stdout}|{terminal_stderr}|random={random_bytes:?}:{random_u64}|insecure={insecure_bytes:?}:{insecure_u64}:{insecure_seed:?}|{filesystem}",
+            "{environment:?}|{arguments:?}|{initial_cwd:?}|{}:{}|{}:{}|{instant}|{instant_resolution}|{instant_ready}|{clock_poll:?}|{read:?}|{blocking_read:?}|{skipped}|{blocking_skipped}|{input_ready}|{write_permit}|{output_ready}|{spliced}|{blocking_spliced}|{terminal_stdin}|{terminal_stdout}|{terminal_stderr}|random={random_bytes:?}:{random_u64}|insecure={insecure_bytes:?}:{insecure_u64}:{insecure_seed:?}|{filesystem}|{sockets}",
             wall.seconds, wall.nanoseconds, wall_resolution.seconds, wall_resolution.nanoseconds,
         )
     }
@@ -196,6 +197,43 @@ impl Guest for Component {
             .unwrap();
         let _ = wasi::random::random::get_random_u64();
     }
+
+    fn socket_denial(port: u16) -> bool {
+        use wasi::sockets::network::{
+            ErrorCode, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress,
+        };
+
+        let network = wasi::sockets::instance_network::instance_network();
+        let socket =
+            wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
+        matches!(
+            socket.start_connect(
+                &network,
+                IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                    address: (127, 0, 0, 1),
+                    port,
+                }),
+            ),
+            Err(ErrorCode::AccessDenied)
+        )
+    }
+
+    fn net_allowlist(allowed_port: u16, denied_port: u16) -> String {
+        use wasi::sockets::network::ErrorCode;
+
+        let network = wasi::sockets::instance_network::instance_network();
+        let address = resolve_localhost(&network);
+        let allowed = connect_and_echo(&network, address, allowed_port)
+            .unwrap_or_else(|error| format!("{error:?}"));
+        let denied = connect_and_echo(&network, address, denied_port)
+            .unwrap_or_else(|error| format!("{error:?}"));
+        let denied = if denied == format!("{:?}", ErrorCode::AccessDenied) {
+            "access-denied".to_owned()
+        } else {
+            denied
+        };
+        format!("allowed: {allowed}\ndenied: {denied}\n")
+    }
 }
 
 export!(Component);
@@ -279,4 +317,291 @@ fn exercise_filesystem() -> String {
         String::from_utf8_lossy(&direct),
         String::from_utf8_lossy(&streamed)
     )
+}
+
+fn exercise_sockets() -> String {
+    use wasi::sockets::network::{
+        ErrorCode, IpAddress, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress,
+    };
+    use wasi::sockets::{instance_network, ip_name_lookup, tcp, tcp_create_socket, udp};
+
+    let network = instance_network::instance_network();
+    let listener = tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
+    listener.set_listen_backlog_size(4).unwrap();
+    listener
+        .start_bind(
+            &network,
+            IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port: 0,
+            }),
+        )
+        .unwrap();
+    listener.finish_bind().unwrap();
+    let listen_address = listener.local_address().unwrap();
+    listener.start_listen().unwrap();
+    listener.finish_listen().unwrap();
+    let listening = listener.is_listening();
+    let tcp_family = listener.address_family();
+
+    let client = tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
+    let tcp_buffers = exercise_tcp_options(&client);
+    client
+        .start_bind(
+            &network,
+            IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port: 0,
+            }),
+        )
+        .unwrap();
+    client.finish_bind().unwrap();
+    client.start_connect(&network, listen_address).unwrap();
+    let client_ready = client.subscribe();
+    client_ready.block();
+    let (client_input, client_output) = finish_connect(&client);
+    let remote_matches = same_address(client.remote_address().unwrap(), listen_address);
+
+    let listener_ready = listener.subscribe();
+    listener_ready.block();
+    let (accepted, accepted_input, accepted_output) = accept(&listener);
+    let accepted_local = same_address(accepted.local_address().unwrap(), listen_address);
+    let _ = accepted.remote_address().unwrap();
+    client_output.blocking_write_and_flush(b"tcp").unwrap();
+    let received = accepted_input.blocking_read(3).unwrap();
+    accepted_output.blocking_write_and_flush(&received).unwrap();
+    let echoed = client_input.blocking_read(3).unwrap();
+    client.shutdown(tcp::ShutdownType::Both).unwrap();
+
+    let udp_left = udp_create(&network);
+    let udp_right = udp_create(&network);
+    let udp_buffers = exercise_udp_options(&udp_left);
+    let right_address = udp_right.local_address().unwrap();
+    let (left_incoming, left_outgoing) = udp_left.stream(Some(right_address)).unwrap();
+    let (right_incoming, right_outgoing) = udp_right.stream(None).unwrap();
+    let udp_remote = same_address(udp_left.remote_address().unwrap(), right_address);
+    let send_ready = left_outgoing.subscribe();
+    while left_outgoing.check_send().unwrap() == 0 {
+        send_ready.block();
+    }
+    let sent = left_outgoing
+        .send(&[udp::OutgoingDatagram {
+            data: b"udp".to_vec(),
+            remote_address: None,
+        }])
+        .unwrap();
+    let receive_ready = right_incoming.subscribe();
+    let datagrams = loop {
+        let datagrams = right_incoming.receive(1).unwrap();
+        if !datagrams.is_empty() {
+            break datagrams;
+        }
+        receive_ready.block();
+    };
+
+    let resolver = ip_name_lookup::resolve_addresses(&network, "localhost").unwrap();
+    let resolver_ready = resolver.subscribe();
+    let resolved = loop {
+        match resolver.resolve_next_address() {
+            Ok(Some(address)) => break address,
+            Ok(None) => unreachable!(),
+            Err(ErrorCode::WouldBlock) => resolver_ready.block(),
+            Err(error) => panic!("localhost resolution failed: {error:?}"),
+        }
+    };
+    while matches!(resolver.resolve_next_address(), Ok(Some(_))) {}
+
+    drop(resolver_ready);
+    drop(resolver);
+    drop(send_ready);
+    drop(receive_ready);
+    drop(left_incoming);
+    drop(left_outgoing);
+    drop(right_incoming);
+    drop(right_outgoing);
+    drop(client_ready);
+    drop(listener_ready);
+    drop(client_input);
+    drop(client_output);
+    drop(accepted_input);
+    drop(accepted_output);
+    drop(accepted);
+    drop(listener);
+    drop(client);
+    drop(network);
+
+    format!(
+        "sockets={listening}:{tcp_family:?}:{remote_matches}:{accepted_local}:{}:{tcp_buffers:?}:{sent}:{}:{udp_buffers:?}:{udp_remote}:{}",
+        String::from_utf8_lossy(&echoed),
+        String::from_utf8_lossy(&datagrams[0].data),
+        matches!(resolved, IpAddress::Ipv4(_) | IpAddress::Ipv6(_)),
+    )
+}
+
+fn finish_connect(
+    socket: &wasi::sockets::tcp::TcpSocket,
+) -> (
+    wasi::io::streams::InputStream,
+    wasi::io::streams::OutputStream,
+) {
+    loop {
+        match socket.finish_connect() {
+            Ok(streams) => return streams,
+            Err(wasi::sockets::network::ErrorCode::WouldBlock) => socket.subscribe().block(),
+            Err(error) => panic!("connect failed: {error:?}"),
+        }
+    }
+}
+
+fn accept(
+    socket: &wasi::sockets::tcp::TcpSocket,
+) -> (
+    wasi::sockets::tcp::TcpSocket,
+    wasi::io::streams::InputStream,
+    wasi::io::streams::OutputStream,
+) {
+    loop {
+        match socket.accept() {
+            Ok(connection) => return connection,
+            Err(wasi::sockets::network::ErrorCode::WouldBlock) => socket.subscribe().block(),
+            Err(error) => panic!("accept failed: {error:?}"),
+        }
+    }
+}
+
+type TcpOptions = (bool, u64, u64, u32, u8);
+type BufferSizes = (u64, u64);
+
+fn exercise_tcp_options(
+    socket: &wasi::sockets::tcp::TcpSocket,
+) -> (TcpOptions, TcpOptions, BufferSizes) {
+    let defaults = (
+        socket.keep_alive_enabled().unwrap(),
+        socket.keep_alive_idle_time().unwrap(),
+        socket.keep_alive_interval().unwrap(),
+        socket.keep_alive_count().unwrap(),
+        socket.hop_limit().unwrap(),
+    );
+    socket.set_keep_alive_enabled(true).unwrap();
+    socket.set_keep_alive_idle_time(13_000_000_000).unwrap();
+    socket.set_keep_alive_interval(7_000_000_000).unwrap();
+    socket.set_keep_alive_count(5).unwrap();
+    socket.set_hop_limit(42).unwrap();
+    socket.set_receive_buffer_size(8_192).unwrap();
+    socket.set_send_buffer_size(32_768).unwrap();
+    (
+        defaults,
+        (
+            socket.keep_alive_enabled().unwrap(),
+            socket.keep_alive_idle_time().unwrap(),
+            socket.keep_alive_interval().unwrap(),
+            socket.keep_alive_count().unwrap(),
+            socket.hop_limit().unwrap(),
+        ),
+        (
+            socket.receive_buffer_size().unwrap(),
+            socket.send_buffer_size().unwrap(),
+        ),
+    )
+}
+
+fn udp_create(network: &wasi::sockets::network::Network) -> wasi::sockets::udp::UdpSocket {
+    use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
+
+    let socket =
+        wasi::sockets::udp_create_socket::create_udp_socket(IpAddressFamily::Ipv4).unwrap();
+    socket
+        .start_bind(
+            network,
+            IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port: 0,
+            }),
+        )
+        .unwrap();
+    socket.finish_bind().unwrap();
+    socket
+}
+
+fn exercise_udp_options(socket: &wasi::sockets::udp::UdpSocket) -> (u8, u8, u64, u64) {
+    let _ = socket.address_family();
+    let default_hop_limit = socket.unicast_hop_limit().unwrap();
+    socket.set_unicast_hop_limit(37).unwrap();
+    socket.set_receive_buffer_size(8_192).unwrap();
+    socket.set_send_buffer_size(32_768).unwrap();
+    let options = (
+        default_hop_limit,
+        socket.unicast_hop_limit().unwrap(),
+        socket.receive_buffer_size().unwrap(),
+        socket.send_buffer_size().unwrap(),
+    );
+    let pollable = socket.subscribe();
+    let _ = pollable.ready();
+    options
+}
+
+fn same_address(
+    left: wasi::sockets::network::IpSocketAddress,
+    right: wasi::sockets::network::IpSocketAddress,
+) -> bool {
+    use wasi::sockets::network::IpSocketAddress;
+
+    match (left, right) {
+        (IpSocketAddress::Ipv4(left), IpSocketAddress::Ipv4(right)) => {
+            left.address == right.address && left.port == right.port
+        }
+        (IpSocketAddress::Ipv6(left), IpSocketAddress::Ipv6(right)) => {
+            left.address == right.address
+                && left.port == right.port
+                && left.flow_info == right.flow_info
+                && left.scope_id == right.scope_id
+        }
+        (IpSocketAddress::Ipv4(_), IpSocketAddress::Ipv6(_))
+        | (IpSocketAddress::Ipv6(_), IpSocketAddress::Ipv4(_)) => false,
+    }
+}
+
+fn resolve_localhost(
+    network: &wasi::sockets::network::Network,
+) -> wasi::sockets::network::Ipv4Address {
+    use wasi::sockets::network::{ErrorCode, IpAddress};
+
+    let resolver = wasi::sockets::ip_name_lookup::resolve_addresses(network, "localhost").unwrap();
+    let ready = resolver.subscribe();
+    loop {
+        match resolver.resolve_next_address() {
+            Ok(Some(IpAddress::Ipv4(address))) => return address,
+            Ok(Some(IpAddress::Ipv6(_))) => {}
+            Ok(None) => panic!("localhost did not resolve to IPv4"),
+            Err(ErrorCode::WouldBlock) => ready.block(),
+            Err(error) => panic!("localhost resolution failed: {error:?}"),
+        }
+    }
+}
+
+fn connect_and_echo(
+    network: &wasi::sockets::network::Network,
+    address: wasi::sockets::network::Ipv4Address,
+    port: u16,
+) -> Result<String, wasi::sockets::network::ErrorCode> {
+    use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
+
+    let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4)?;
+    socket.start_bind(
+        network,
+        IpSocketAddress::Ipv4(Ipv4SocketAddress {
+            address: (127, 0, 0, 1),
+            port: 0,
+        }),
+    )?;
+    socket.finish_bind()?;
+    socket.start_connect(
+        network,
+        IpSocketAddress::Ipv4(Ipv4SocketAddress { address, port }),
+    )?;
+    socket.subscribe().block();
+    let (input, output) = finish_connect(&socket);
+    output.blocking_write_and_flush(b"hello").unwrap();
+    let echo = input.blocking_read(5).unwrap();
+    Ok(String::from_utf8_lossy(&echo).into_owned())
 }

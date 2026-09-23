@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "hello",
+  "network-error-code",
   "sandbox",
   "smoke-p2",
   "smoke-p3",

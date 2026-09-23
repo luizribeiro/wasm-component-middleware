@@ -12,4 +12,6 @@ world workload {
   export rust-std-paths: func() -> u32;
   export quota-files: func() -> string;
   export random-demo: func();
+  export socket-denial: func(port: u16) -> bool;
+  export net-allowlist: func(allowed-port: u16, denied-port: u16) -> string;
 }

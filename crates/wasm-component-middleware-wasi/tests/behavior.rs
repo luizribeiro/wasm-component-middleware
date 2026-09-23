@@ -8,7 +8,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -312,6 +312,10 @@ impl P3Harness {
 
     async fn new_relayed(chain: Arc<Chain<State>>) -> wasmtime::Result<Self> {
         Self::new_with_linking(true, true, false, chain).await
+    }
+
+    async fn new_for_benchmark(relayed: bool, blocking: bool) -> wasmtime::Result<Self> {
+        Self::new_with_linking(true, relayed, blocking, Chain::builder().build()).await
     }
 
     async fn new_with_linking(
@@ -1389,6 +1393,36 @@ async fn cancelling_a_relayed_write_does_not_hang() {
     .await
     .unwrap()
     .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "throughput benchmark; run in release mode with --ignored --nocapture"]
+async fn relay_throughput() {
+    const SIZE: usize = 64 * 1024 * 1024;
+    const RUNS: usize = 3;
+
+    for (path, blocking) in [("buffered", false), ("direct", true)] {
+        for (mode, relayed) in [("unrelayed", false), ("relayed", true)] {
+            let mut harness = P3Harness::new_for_benchmark(relayed, blocking)
+                .await
+                .unwrap();
+            fs::write(
+                harness.directory.path().join("benchmark.bin"),
+                stream_data(SIZE),
+            )
+            .unwrap();
+            harness.stream_read("benchmark.bin", false).await.unwrap();
+            let started = Instant::now();
+            for _ in 0..RUNS {
+                let result = harness.stream_read("benchmark.bin", false).await.unwrap();
+                assert!(result.contains("completion=ok"));
+            }
+            let mib_per_second = f64::from(u32::try_from(SIZE * RUNS).unwrap())
+                / (1024.0 * 1024.0)
+                / started.elapsed().as_secs_f64();
+            println!("{path:8} {mode:9} {mib_per_second:8.2} MiB/s");
+        }
+    }
 }
 
 #[derive(Clone)]

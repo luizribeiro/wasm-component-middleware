@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "hello",
+  "sandbox",
   "smoke-p2",
   "smoke-p3",
   "unrouted-import",

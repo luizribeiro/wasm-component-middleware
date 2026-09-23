@@ -11,6 +11,12 @@ pub fn hello() -> &'static Path {
     Path::new(env!("HELLO_COMPONENT"))
 }
 
+/// Returns the path to the guest that performs sandboxed filesystem work.
+#[must_use]
+pub fn sandbox() -> &'static Path {
+    Path::new(env!("SANDBOX_COMPONENT"))
+}
+
 /// Returns the path to the synchronous Preview 2 smoke component.
 #[must_use]
 pub fn smoke_p2() -> &'static Path {

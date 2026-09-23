@@ -1100,3 +1100,38 @@ fn wasi_p3_example_prints_the_trace_and_guest_output() {
         )
     );
 }
+
+#[test]
+fn sandbox_example_prints_file_policy_results_and_handle_traces() {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "run",
+            "--quiet",
+            "-p",
+            "wasm-component-middleware-wasi",
+            "--example",
+            "sandbox",
+            "--locked",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        concat!(
+            "read public/note.txt: hello\n",
+            "read private/secret.txt: access\n",
+            "escape from public preopen: access\n",
+            "open public/one.txt: allowed\n",
+            "open public/two.txt: allowed\n",
+            "open public/three.txt: access\n",
+        )
+    );
+    let trace = String::from_utf8(output.stderr).unwrap();
+    assert!(trace.contains("get-directories()\n← #1 returned produced=[0, 1]"));
+    assert!(trace.contains("[resource-drop]descriptor()"));
+    assert!(trace.contains("failed: open file limit of 4 reached"));
+    assert!(trace.contains("failed: descriptor is private"));
+    assert!(trace.contains("failed: not-permitted"));
+}

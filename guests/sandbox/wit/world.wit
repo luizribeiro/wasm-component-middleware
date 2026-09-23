@@ -1,0 +1,5 @@
+package example:sandbox;
+
+world sandbox {
+  export run: func();
+}

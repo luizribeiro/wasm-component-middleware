@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::future::poll_fn;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
@@ -1801,18 +1800,7 @@ async fn dropping_a_store_with_a_pending_p3_call_does_not_panic() {
 
 #[test]
 fn wasi_example_prints_the_trace_and_guest_output() {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "wasm-component-middleware-wasi",
-            "--example",
-            "wasi-p2",
-            "--locked",
-        ])
-        .output()
-        .unwrap();
+    let output = test_guests::run_example("wasm-component-middleware-wasi", "wasi-p2").unwrap();
 
     assert!(output.status.success());
     assert_eq!(
@@ -1838,18 +1826,7 @@ fn wasi_example_prints_the_trace_and_guest_output() {
 
 #[test]
 fn wasi_p3_example_prints_the_trace_and_guest_output() {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "wasm-component-middleware-wasi",
-            "--example",
-            "wasi-p3",
-            "--locked",
-        ])
-        .output()
-        .unwrap();
+    let output = test_guests::run_example("wasm-component-middleware-wasi", "wasi-p3").unwrap();
 
     assert!(output.status.success());
     assert_eq!(
@@ -1871,18 +1848,7 @@ fn wasi_p3_example_prints_the_trace_and_guest_output() {
 
 #[test]
 fn byte_budget_example_reports_the_relay_denial() {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "wasm-component-middleware-wasi",
-            "--example",
-            "byte-budget",
-            "--locked",
-        ])
-        .output()
-        .unwrap();
+    let output = test_guests::run_example("wasm-component-middleware-wasi", "byte-budget").unwrap();
 
     assert!(output.status.success());
     assert_eq!(
@@ -1901,18 +1867,7 @@ fn byte_budget_example_reports_the_relay_denial() {
 
 #[test]
 fn random_example_prints_the_trace_and_refusal() {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "wasm-component-middleware-wasi",
-            "--example",
-            "random",
-            "--locked",
-        ])
-        .output()
-        .unwrap();
+    let output = test_guests::run_example("wasm-component-middleware-wasi", "random").unwrap();
 
     assert!(output.status.success());
     assert_eq!(
@@ -1959,18 +1914,8 @@ fn strip_loopback_ports(output: &str) -> String {
 
 #[test]
 fn net_allowlist_example_traces_addresses_and_reports_access() {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "wasm-component-middleware-wasi",
-            "--example",
-            "net-allowlist",
-            "--locked",
-        ])
-        .output()
-        .unwrap();
+    let output =
+        test_guests::run_example("wasm-component-middleware-wasi", "net-allowlist").unwrap();
 
     assert!(output.status.success());
     assert_eq!(
@@ -2056,18 +2001,7 @@ fn net_allowlist_example_traces_addresses_and_reports_access() {
 
 #[test]
 fn sandbox_example_prints_file_policy_results_and_handle_traces() {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "wasm-component-middleware-wasi",
-            "--example",
-            "sandbox",
-            "--locked",
-        ])
-        .output()
-        .unwrap();
+    let output = test_guests::run_example("wasm-component-middleware-wasi", "sandbox").unwrap();
 
     assert!(output.status.success());
     assert_eq!(

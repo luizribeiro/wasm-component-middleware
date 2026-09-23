@@ -3,7 +3,142 @@
 //! The components are built in an isolated guest workspace so host workspace
 //! commands never compile guest crates for the native target.
 
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const BUILD_TIMEOUT: Duration = Duration::from_secs(300);
+const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Runs a workspace example for an output assertion with a bounded lifetime.
+///
+/// Use this in integration tests that verify an example's standard output and
+/// standard error. A timed-out subprocess is killed and reported as an I/O
+/// error so one stuck executable cannot block the test suite indefinitely.
+///
+/// # Errors
+///
+/// Returns an error when the process cannot be started, its output cannot be
+/// collected, its build exceeds five minutes, or two launch attempts each
+/// exceed one minute.
+pub fn run_example(package: &str, example: &str) -> io::Result<Output> {
+    let lock = example_lock()?;
+    let workspace = workspace_root();
+    let mut build = Command::new(env!("CARGO"));
+    build.current_dir(&workspace).args([
+        "build",
+        "--quiet",
+        "-p",
+        package,
+        "--example",
+        example,
+        "--locked",
+    ]);
+    let build = output_with_timeout(&mut build, BUILD_TIMEOUT)?;
+    if !build.status.success() {
+        return Err(io::Error::other(format!(
+            "example build failed: {}",
+            String::from_utf8_lossy(&build.stderr)
+        )));
+    }
+    drop(lock);
+
+    let executable = example_executable(example);
+    for attempt in 0..2 {
+        let mut command = Command::new(&executable);
+        command.current_dir(&workspace);
+        match output_with_timeout(&mut command, EXAMPLE_TIMEOUT) {
+            Err(error) if error.kind() == io::ErrorKind::TimedOut && attempt == 0 => {}
+            result => return result,
+        }
+    }
+    unreachable!()
+}
+
+fn example_lock() -> io::Result<File> {
+    let target = target_dir();
+    std::fs::create_dir_all(&target)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(target.join("example-tests.lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+fn example_executable(example: &str) -> PathBuf {
+    let mut path = target_dir().join("debug/examples").join(example);
+    if cfg!(windows) {
+        path.set_extension("exe");
+    }
+    path
+}
+
+fn target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| workspace_root().join("target"), PathBuf::from)
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("example stdout was not captured"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("example stderr was not captured"))?;
+    let stdout = thread::spawn(move || read_all(stdout));
+    let stderr = thread::spawn(move || read_all(stderr));
+    let deadline = Instant::now() + timeout;
+
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            child.wait()?;
+            join_reader(stdout)?;
+            join_reader(stderr)?;
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("example exceeded {} seconds", timeout.as_secs()),
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+
+    Ok(Output {
+        status,
+        stdout: join_reader(stdout)?,
+        stderr: join_reader(stderr)?,
+    })
+}
+
+fn read_all(mut reader: impl Read) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn join_reader(reader: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+    reader
+        .join()
+        .map_err(|_| io::Error::other("example output reader panicked"))?
+}
 
 /// Returns the path to the guest that imports host identity and logging.
 #[must_use]

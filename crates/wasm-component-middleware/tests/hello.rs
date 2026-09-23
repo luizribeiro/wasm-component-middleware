@@ -1,7 +1,6 @@
 #![allow(missing_docs)]
 
 use std::collections::HashSet;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use wasm_component_middleware::{
@@ -165,18 +164,7 @@ fn unrouted_import_is_named_before_instantiation() {
 
 #[test]
 fn trace_example_prints_nested_calls_and_greeting() {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "wasm-component-middleware",
-            "--example",
-            "trace",
-            "--locked",
-        ])
-        .output()
-        .unwrap();
+    let output = test_guests::run_example("wasm-component-middleware", "trace").unwrap();
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "Hello, Ada!\n");
@@ -188,18 +176,7 @@ fn trace_example_prints_nested_calls_and_greeting() {
 
 #[test]
 fn deny_example_refuses_one_store_and_allows_the_next() {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "--quiet",
-            "-p",
-            "wasm-component-middleware",
-            "--example",
-            "deny",
-            "--locked",
-        ])
-        .output()
-        .unwrap();
+    let output = test_guests::run_example("wasm-component-middleware", "deny").unwrap();
 
     assert!(output.status.success());
     assert!(output.stdout.is_empty());

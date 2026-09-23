@@ -37,7 +37,87 @@ where
 
 macro_rules! gate {
     (
-        socket $gate:ident, $version:expr, $interface:literal, $function:literal,
+        socket3 $gate:ident, $version:expr, $interface:expr, $function:literal,
+        handles = [$($handle:expr),* $(,)?], args = $args:tt,
+        delegate = $delegate:expr $(, produced = $produced:expr)?
+    ) => {{
+        let result = gate!(
+            trap $gate, $version, $interface, $function,
+            handles = [$($handle),*], args = $args,
+            delegate = $delegate $(, produced = $produced)?
+        );
+        gate!(@socket3_error result)
+    }};
+    (
+        socket3_state_async $gate:ident, $version:expr, $interface:expr, $function:literal,
+        handles = [$($handle:expr),* $(,)?], args = $args:tt,
+        delegate = $delegate:expr $(, produced = $produced:expr)?
+    ) => {{
+        let chain = std::sync::Arc::clone($gate.state.middleware().chain());
+        let handles: Vec<u32> = [$($handle.rep()),*].into_iter().collect();
+        let arguments = gate!(@args $args);
+        let call = wasm_component_middleware::Call::new(
+            chain.next_id(),
+            wasm_component_middleware::Direction::Import,
+            $function,
+        )
+        .in_interface($interface, Some($version))
+        .with_handles(&handles)
+        .with_args(&arguments);
+        let result = chain.dispatch_state_async($gate.state, &call, async |state| {
+            let value = ($delegate)(state).await?;
+            let produced = gate!(@produced value $(, $produced)?);
+            Ok((value, wasm_component_middleware::Completion { produced }))
+        }).await;
+        gate!(@socket3_error result)
+    }};
+    (
+        socket3_async $store:ident, $interface:expr, $function:literal,
+        handles = $handles:expr, args = $args:tt, delegate = $delegate:expr
+        $(, produced = $produced:expr)?
+    ) => {{
+        let result = gate!(
+            async $store, $interface, $function,
+            handles = $handles, args = $args,
+            delegate = $delegate $(, produced = $produced)?
+        );
+        gate!(@socket3_error result)
+    }};
+    (
+        socket3_access $store:ident, $interface:expr, $function:literal,
+        handles = $handles:expr, args = $args:tt, delegate = $delegate:expr
+        $(, produced = $produced:expr)?
+    ) => {{
+        let result = gate!(
+            access $store, $interface, $function,
+            handles = $handles, args = $args,
+            delegate = $delegate $(, produced = $produced)?
+        );
+        gate!(@socket3_error result)
+    }};
+    (
+        socket3_access_async $store:ident, $interface:expr, $function:literal,
+        handles = $handles:expr, args = $args:tt,
+        parameters = $parameters:expr, delegate = $delegate:expr
+    ) => {{
+        let chain = std::sync::Arc::clone($store.data_mut().middleware().chain());
+        let handles: Vec<u32> = ($handles).into_iter().collect();
+        let arguments = gate!(@args $args);
+        let call = wasm_component_middleware::Call::new(
+            chain.next_id(),
+            wasm_component_middleware::Direction::Import,
+            $function,
+        )
+        .in_interface($interface, Some($crate::p3::WASI_VERSION))
+        .with_handles(&handles)
+        .with_args(&arguments);
+        let result = chain
+            .dispatch_access_async($store, &call, $parameters, $delegate)
+            .await;
+        gate!(@socket3_error result)
+    }};
+    (
+        socket $gate:ident, $version:expr, $interface:expr, $function:literal,
         handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr $(, produced = $produced:expr)?
     ) => {{
@@ -55,7 +135,7 @@ macro_rules! gate {
         })
     }};
     (
-        filesystem $gate:ident, $version:expr, $interface:literal, $function:literal,
+        filesystem $gate:ident, $version:expr, $interface:expr, $function:literal,
         handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr, denied = $denied:expr, wrapper = $wrapper:ty
         $(, produced = $produced:expr)?
@@ -74,7 +154,7 @@ macro_rules! gate {
         })
     }};
     (
-        filesystem_async $store:ident, $interface:literal, $function:literal,
+        filesystem_async $store:ident, $interface:expr, $function:literal,
         handles = $handles:expr, args = $args:tt,
         delegate = $delegate:expr, denied = $denied:expr, wrapper = $wrapper:ty
         $(, produced = $produced:expr)?
@@ -93,7 +173,7 @@ macro_rules! gate {
         })
     }};
     (
-        trap $gate:ident, $version:expr, $interface:literal, $function:literal,
+        trap $gate:ident, $version:expr, $interface:expr, $function:literal,
         handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr $(, produced = $produced:expr)?
     ) => {{
@@ -105,7 +185,7 @@ macro_rules! gate {
         )
     }};
     (
-        trap_each $gate:ident, $version:expr, $interface:literal, $function:literal,
+        trap_each $gate:ident, $version:expr, $interface:expr, $function:literal,
         handles = $resources:expr, args = $args:tt,
         delegate = $delegate:expr
     ) => {{
@@ -116,7 +196,7 @@ macro_rules! gate {
         )
     }};
     (
-        @sync $gate:ident, $interface:literal, $version:expr, $function:literal,
+        @sync $gate:ident, $interface:expr, $version:expr, $function:literal,
         handles = $handles:expr, args = $args:tt,
         delegate = $delegate:expr, produced = $produced:expr
     ) => {{
@@ -138,7 +218,7 @@ macro_rules! gate {
         })
     }};
     (
-        stream $gate:ident, $version:expr, $interface:literal, $function:literal,
+        stream $gate:ident, $version:expr, $interface:expr, $function:literal,
         handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr
     ) => {{
@@ -153,7 +233,7 @@ macro_rules! gate {
         })
     }};
     (
-        access $store:ident, $interface:literal, $function:literal,
+        access $store:ident, $interface:expr, $function:literal,
         handles = $handles:expr, args = $args:tt,
         delegate = $delegate:expr $(, produced = $produced:expr)?
     ) => {{
@@ -175,7 +255,7 @@ macro_rules! gate {
         })
     }};
     (
-        async $store:ident, $interface:literal, $function:literal,
+        async $store:ident, $interface:expr, $function:literal,
         handles = $handles:expr, args = $args:tt,
         delegate = $delegate:expr $(, produced = $produced:expr)?
     ) => {{
@@ -209,6 +289,15 @@ macro_rules! gate {
     };
     (@producer, $produced:expr) => {
         $produced
+    };
+    (@socket3_error $result:expr) => {
+        $result.map_err(|error| match error.downcast::<wasm_component_middleware::Denied>() {
+            Ok(_) => wasmtime_wasi::p3::bindings::sockets::types::ErrorCode::AccessDenied.into(),
+            Err(error) => match error.downcast::<wasmtime_wasi::p3::sockets::SocketError>() {
+                Ok(error) => error,
+                Err(error) => wasmtime_wasi::p3::sockets::SocketError::trap(error),
+            },
+        })
     };
     (@args ()) => {
         wasm_component_middleware::Arguments::new()

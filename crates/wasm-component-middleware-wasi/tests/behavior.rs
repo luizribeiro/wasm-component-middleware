@@ -480,6 +480,10 @@ impl Harness {
     fn rust_std_paths(&mut self) -> wasmtime::Result<u32> {
         self.guest.call_rust_std_paths(&mut self.store)
     }
+
+    fn quota_files(&mut self) -> wasmtime::Result<String> {
+        self.guest.call_quota_files(&mut self.store)
+    }
 }
 
 fn run(gated: bool) -> wasmtime::Result<Observation> {
@@ -872,6 +876,22 @@ fn rust_std_fetches_preopens_once_for_several_paths() {
         })
         .count();
     assert_eq!(preopen_calls, 1);
+}
+
+#[test]
+fn open_file_limit_reports_access_and_releases_slots() {
+    let mut harness = Harness::new(
+        true,
+        Chain::builder()
+            .layer(wasm_component_middleware_wasi::OpenFiles::new(2))
+            .build(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        harness.quota_files().unwrap(),
+        "missing=true, refused=true, freed=true"
+    );
 }
 
 #[tokio::test]

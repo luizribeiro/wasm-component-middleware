@@ -136,6 +136,50 @@ impl Guest for Component {
             .map(|path| std::fs::read_to_string(path).unwrap().len() as u32)
             .sum()
     }
+
+    fn quota_files() -> String {
+        use wasi::filesystem::types::{DescriptorFlags, ErrorCode, OpenFlags, PathFlags};
+
+        let directories = wasi::filesystem::preopens::get_directories();
+        let root = &directories[0].0;
+        let missing = matches!(
+            root.open_at(
+                PathFlags::empty(),
+                "missing.txt",
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            ),
+            Err(ErrorCode::NoEntry)
+        );
+        let note = root
+            .open_at(
+                PathFlags::empty(),
+                "note.txt",
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .unwrap();
+        let refused = matches!(
+            root.open_at(
+                PathFlags::empty(),
+                "other.txt",
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            ),
+            Err(ErrorCode::Access)
+        );
+        drop(note);
+        let freed = root
+            .open_at(
+                PathFlags::empty(),
+                "other.txt",
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .is_ok();
+
+        format!("missing={missing}, refused={refused}, freed={freed}")
+    }
 }
 
 export!(Component);

@@ -186,6 +186,44 @@ fn trace_example_prints_nested_calls_and_greeting() {
 }
 
 #[test]
+fn deny_example_refuses_one_store_and_allows_the_next() {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "run",
+            "--quiet",
+            "-p",
+            "wasm-component-middleware",
+            "--example",
+            "deny",
+            "--locked",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        concat!(
+            "denied:\n",
+            "→ #1 export greet(\"Hello\")\n",
+            "  → #2 import example:hello/host.user-name()\n",
+            "  ← #2 failed: import example:hello/host.user-name is not allowed\n",
+            "← #1 failed: import example:hello/host.user-name is not allowed\n",
+            "greet failed: import example:hello/host.user-name is not allowed\n",
+            "allowed:\n",
+            "→ #1 export greet(\"Hello\")\n",
+            "  → #2 import example:hello/host.user-name()\n",
+            "  ← #2 returned\n",
+            "  → #3 import example:hello/host.log(\"greeting Ada\")\n",
+            "  ← #3 returned\n",
+            "← #1 returned\n",
+            "Hello, Ada!\n",
+        )
+    );
+}
+
+#[test]
 fn denial_from_user_name_survives_the_component_boundary() {
     let observations = Arc::new(Mutex::new(Observations::default()));
     let chain = Chain::builder()

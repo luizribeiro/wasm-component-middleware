@@ -116,7 +116,10 @@ where
         self.end_call(invocation);
         let outcome = match outcome {
             Outcome::Returned(_) => "returned".to_owned(),
-            Outcome::Failed(error) => format!("failed: {error}"),
+            Outcome::Failed(error) => error.downcast_ref::<Denied>().map_or_else(
+                || format!("failed: {error}"),
+                |denied| format!("failed: {denied}"),
+            ),
             Outcome::Cancelled => "cancelled".to_owned(),
         };
         let _ = writeln!(

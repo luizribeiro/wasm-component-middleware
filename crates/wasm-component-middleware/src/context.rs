@@ -1,13 +1,17 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Chain;
 
 type Extensions = HashMap<TypeId, Box<dyn Any + Send + Sync>>;
 
+static NEXT_INVOCATION_ID: AtomicU64 = AtomicU64::new(1);
+
 /// Identifies a plugin invocation and carries policy-specific state.
 pub struct InvocationContext {
+    id: u64,
     plugin: String,
     extensions: Extensions,
 }
@@ -16,6 +20,7 @@ impl InvocationContext {
     /// Creates an empty context for `plugin`.
     pub fn new(plugin: impl Into<String>) -> Self {
         Self {
+            id: NEXT_INVOCATION_ID.fetch_add(1, Ordering::Relaxed),
             plugin: plugin.into(),
             extensions: HashMap::new(),
         }
@@ -25,6 +30,10 @@ impl InvocationContext {
     #[must_use]
     pub fn plugin(&self) -> &str {
         &self.plugin
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.id
     }
 
     /// Inserts type-keyed policy state, returning the previous value if any.

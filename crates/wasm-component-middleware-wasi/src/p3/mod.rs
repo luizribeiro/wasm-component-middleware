@@ -2,6 +2,7 @@
 
 mod cli;
 mod clocks;
+mod filesystem;
 
 use wasm_component_middleware::{MiddlewareView, RoutedInterface};
 use wasmtime::component::Linker;
@@ -31,6 +32,11 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
 ///
 /// This mirrors [`wasmtime_wasi::p3::add_to_linker`], routing every
 /// `wasi:cli` and `wasi:clocks` call through the store's [`MiddlewareView`].
+/// Filesystem stream calls are gated, but their bytes pass through without
+/// relay or observation.
+/// Refusing filesystem `read-via-stream`, `write-via-stream`,
+/// `append-via-stream`, or `read-directory` traps because Preview 3 gives
+/// those functions no top-level error result in which to return a refusal.
 ///
 /// # Errors
 ///
@@ -39,7 +45,7 @@ pub fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
+    filesystem::add_to_linker(linker)?;
     wasmtime_wasi::p3::random::add_to_linker(linker)?;
     wasmtime_wasi::p3::sockets::add_to_linker(linker)?;
     cli::add_to_linker(linker)?;

@@ -54,6 +54,25 @@ macro_rules! gate {
         })
     }};
     (
+        filesystem_async $store:ident, $interface:literal, $function:literal,
+        handles = $handles:expr, args = $args:tt,
+        delegate = $delegate:expr, denied = $denied:expr, wrapper = $wrapper:ty
+        $(, produced = $produced:expr)?
+    ) => {{
+        let result = gate!(
+            async $store, $interface, $function,
+            handles = $handles, args = $args,
+            delegate = $delegate $(, produced = $produced)?
+        );
+        result.map_err(|error| match error.downcast::<wasm_component_middleware::Denied>() {
+            Ok(_) => $denied,
+            Err(error) => match error.downcast::<$wrapper>() {
+                Ok(error) => error,
+                Err(error) => <$wrapper>::trap(error),
+            },
+        })
+    }};
+    (
         trap $gate:ident, $version:expr, $interface:literal, $function:literal,
         handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr $(, produced = $produced:expr)?

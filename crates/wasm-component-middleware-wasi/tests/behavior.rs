@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::future::poll_fn;
 use std::path::PathBuf;
 use std::process::Command;
@@ -20,7 +21,7 @@ use wasmtime_wasi::cli::{IsTerminal, StdinStream, StdoutStream};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::p2::{InputStream, OutputStream, Pollable, StreamResult};
 use wasmtime_wasi::{
-    HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
+    FsPerms, HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
 };
 use wit_parser::{Resolve, TypeDefKind};
 
@@ -280,6 +281,7 @@ struct Harness {
     stdout: MemoryOutputPipe,
     stderr: MemoryOutputPipe,
     io: IoTrace,
+    _directory: tempfile::TempDir,
 }
 
 struct P3Harness {
@@ -288,6 +290,18 @@ struct P3Harness {
     stdout: MemoryOutputPipe,
     stderr: MemoryOutputPipe,
     monotonic_now: Arc<AtomicU64>,
+    _directory: tempfile::TempDir,
+}
+
+fn preopen_fixture(builder: &mut WasiCtxBuilder) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("note.txt"), b"alpha-file").unwrap();
+    fs::write(directory.path().join("other.txt"), b"other-file").unwrap();
+    fs::create_dir(directory.path().join("empty-dir")).unwrap();
+    builder
+        .preopened_dir(directory.path(), ".", FsPerms::ReadWrite)
+        .unwrap();
+    directory
 }
 
 impl P3Harness {
@@ -317,6 +331,7 @@ impl P3Harness {
             .stderr(stderr.clone())
             .wall_clock(FixedWallClock)
             .monotonic_clock(ProgrammableMonotonicClock(Arc::clone(&monotonic_now)));
+        let directory = preopen_fixture(&mut builder);
         let mut store = Store::new(
             &engine,
             State {
@@ -335,6 +350,7 @@ impl P3Harness {
             stdout,
             stderr,
             monotonic_now,
+            _directory: directory,
         })
     }
 
@@ -390,6 +406,14 @@ impl P3Harness {
             .await??;
         Ok(())
     }
+
+    async fn refused_open(&mut self) -> wasmtime::Result<bool> {
+        let refused = self
+            .store
+            .run_concurrent(async |accessor| self.guest.call_refused_open(accessor).await)
+            .await??;
+        Ok(refused)
+    }
 }
 
 impl Harness {
@@ -426,6 +450,7 @@ impl Harness {
             })
             .wall_clock(FixedWallClock)
             .monotonic_clock(FixedMonotonicClock);
+        let directory = preopen_fixture(&mut builder);
         let mut store = Store::new(
             &engine,
             State {
@@ -444,6 +469,7 @@ impl Harness {
             stdout,
             stderr,
             io,
+            _directory: directory,
         })
     }
 }
@@ -719,6 +745,40 @@ async fn refusing_p3_calls_traps_the_guest() {
     }
 }
 
+#[tokio::test]
+async fn refusing_p3_filesystem_stream_calls_traps_the_guest() {
+    for function in [
+        "[method]descriptor.read-via-stream",
+        "[method]descriptor.write-via-stream",
+        "[method]descriptor.append-via-stream",
+        "[method]descriptor.read-directory",
+    ] {
+        let mut harness = P3Harness::new(true, Chain::builder().layer(Refuse(function)).build())
+            .await
+            .unwrap();
+        let error = harness.exercise().await.unwrap_err();
+
+        assert_eq!(
+            error.downcast_ref::<Denied>().unwrap().reason(),
+            format!("{function} is disabled")
+        );
+    }
+}
+
+#[tokio::test]
+async fn refusing_p3_open_is_a_guest_visible_access_error() {
+    let mut harness = P3Harness::new(
+        true,
+        Chain::builder()
+            .layer(Refuse("[method]descriptor.open-at"))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert!(harness.refused_open().await.unwrap());
+}
+
 #[test]
 fn gated_wasi_matches_plain_wasi() {
     assert_eq!(run(false).unwrap(), run(true).unwrap());
@@ -758,7 +818,14 @@ async fn p3_streams_and_clock_waits_retain_their_distinct_semantics() {
     gated.set_monotonic_now(10_000_000_000);
     let gated_stdin = gated.exercise().await.unwrap();
 
-    assert_eq!(plain_stdin, "p3 input");
+    assert_eq!(
+        plain_stdin,
+        concat!(
+            "p3 input|16:16:true:alpha:DescriptorFlags(READ | WRITE):",
+            "DescriptorType::RegularFile:true:true:",
+            "[true, true, true, true, true, true, true, true, true, true, true, true, true]:true"
+        )
+    );
     assert_eq!(gated_stdin, plain_stdin);
     assert_eq!(plain.stdout.contents().as_ref(), b"p3 stdout");
     assert_eq!(gated.stdout.contents(), plain.stdout.contents());

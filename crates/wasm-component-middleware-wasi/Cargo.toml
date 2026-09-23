@@ -14,6 +14,7 @@ wasmtime-wasi.workspace = true
 
 [dev-dependencies]
 bytes = "1"
+tempfile = "3"
 test-guests = { path = "../test-guests" }
 tokio.workspace = true
 wasmtime = { workspace = true, features = ["cranelift"] }

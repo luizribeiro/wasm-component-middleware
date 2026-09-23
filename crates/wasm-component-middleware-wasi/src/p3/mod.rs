@@ -26,12 +26,15 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
     RoutedInterface::from_static("wasi:clocks/types"),
     RoutedInterface::from_static("wasi:clocks/monotonic-clock"),
     RoutedInterface::from_static("wasi:clocks/system-clock"),
+    RoutedInterface::from_static("wasi:filesystem/preopens"),
+    RoutedInterface::from_static("wasi:filesystem/types"),
 ];
 
 /// Adds WASI Preview 3 interfaces with middleware gates.
 ///
 /// This mirrors [`wasmtime_wasi::p3::add_to_linker`], routing every
-/// `wasi:cli` and `wasi:clocks` call through the store's [`MiddlewareView`].
+/// `wasi:cli`, `wasi:clocks`, and `wasi:filesystem` call through the store's
+/// [`MiddlewareView`].
 /// Filesystem stream calls are gated, but their bytes pass through without
 /// relay or observation.
 /// Refusing filesystem `read-via-stream`, `write-via-stream`,

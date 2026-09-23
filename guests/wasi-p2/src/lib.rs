@@ -49,6 +49,7 @@ impl Guest for Component {
         let stdout = wasi::cli::stdout::get_stdout();
         match stdout.blocking_write_and_flush(b"guest write\n") {
             Err(wasi::io::streams::StreamError::LastOperationFailed(error)) => {
+                let _ = wasi::filesystem::types::filesystem_error_code(&error);
                 let _ = error.to_debug_string();
                 true
             }
@@ -97,11 +98,12 @@ impl Guest for Component {
         let terminal_stdin = wasi::cli::terminal_stdin::get_terminal_stdin().is_some();
         let terminal_stdout = wasi::cli::terminal_stdout::get_terminal_stdout().is_some();
         let terminal_stderr = wasi::cli::terminal_stderr::get_terminal_stderr().is_some();
+        let filesystem = exercise_filesystem();
         drop(input_pollable);
         drop(output_pollable);
 
         format!(
-            "{environment:?}|{arguments:?}|{initial_cwd:?}|{}:{}|{}:{}|{instant}|{instant_resolution}|{instant_ready}|{clock_poll:?}|{read:?}|{blocking_read:?}|{skipped}|{blocking_skipped}|{input_ready}|{write_permit}|{output_ready}|{spliced}|{blocking_spliced}|{terminal_stdin}|{terminal_stdout}|{terminal_stderr}",
+            "{environment:?}|{arguments:?}|{initial_cwd:?}|{}:{}|{}:{}|{instant}|{instant_resolution}|{instant_ready}|{clock_poll:?}|{read:?}|{blocking_read:?}|{skipped}|{blocking_skipped}|{input_ready}|{write_permit}|{output_ready}|{spliced}|{blocking_spliced}|{terminal_stdin}|{terminal_stdout}|{terminal_stderr}|{filesystem}",
             wall.seconds, wall.nanoseconds, wall_resolution.seconds, wall_resolution.nanoseconds,
         )
     }
@@ -124,3 +126,84 @@ impl Guest for Component {
 }
 
 export!(Component);
+
+fn exercise_filesystem() -> String {
+    use wasi::filesystem::types::{Advice, DescriptorFlags, NewTimestamp, OpenFlags, PathFlags};
+
+    let directories = wasi::filesystem::preopens::get_directories();
+    let root = &directories[0].0;
+    let file = root
+        .open_at(
+            PathFlags::empty(),
+            "note.txt",
+            OpenFlags::empty(),
+            DescriptorFlags::READ | DescriptorFlags::WRITE,
+        )
+        .unwrap();
+
+    let _ = file.advise(0, 5, Advice::Sequential);
+    let sync_data = file.sync_data().is_ok();
+    let flags = file.get_flags().unwrap();
+    let descriptor_type = file.get_type().unwrap();
+    let _ = file.set_size(10);
+    let _ = file.set_times(NewTimestamp::NoChange, NewTimestamp::NoChange);
+    let direct = file.read(5, 0).unwrap().0;
+    let _ = file.write(b"A", 9);
+    let entries = root.read_directory().unwrap();
+    while entries.read_directory_entry().unwrap().is_some() {}
+    let sync = root.sync().is_ok();
+    let created = root.create_directory_at("created").is_ok();
+    let stat = file.stat().unwrap();
+    let stat_at = root.stat_at(PathFlags::empty(), "note.txt").unwrap();
+    let _ = root.set_times_at(
+        PathFlags::empty(),
+        "note.txt",
+        NewTimestamp::NoChange,
+        NewTimestamp::NoChange,
+    );
+    let linked = root
+        .link_at(PathFlags::empty(), "note.txt", root, "linked.txt")
+        .is_ok();
+    let removed = root.remove_directory_at("empty-dir").is_ok();
+    let renamed = root.rename_at("other.txt", root, "renamed.txt").is_ok();
+    let symlinked = root.symlink_at("note.txt", "symbolic.txt").is_ok();
+    let link_target = root.readlink_at("symbolic.txt").unwrap();
+    let unlinked = root.unlink_file_at("linked.txt").is_ok();
+
+    let input = file.read_via_stream(0).unwrap();
+    let streamed = input.blocking_read(5).unwrap();
+    let output = file.write_via_stream(5).unwrap();
+    let _ = output.blocking_write_and_flush(b"write");
+    let append = file.append_via_stream().unwrap();
+    let _ = append.blocking_write_and_flush(b"append");
+    let same = file.is_same_object(&file);
+    let hash = file.metadata_hash().unwrap();
+    let hash_at = root
+        .metadata_hash_at(PathFlags::empty(), "note.txt")
+        .unwrap();
+    let hashes_match = hash.lower == hash_at.lower && hash.upper == hash_at.upper;
+    let exists = |path| root.stat_at(PathFlags::empty(), path).is_ok();
+    let effects = [
+        created,
+        exists("created"),
+        removed,
+        !exists("empty-dir"),
+        linked,
+        exists("note.txt"),
+        renamed,
+        !exists("other.txt"),
+        exists("renamed.txt"),
+        symlinked,
+        link_target == "note.txt",
+        unlinked,
+        !exists("linked.txt"),
+    ];
+
+    format!(
+        "{}:{}:{same}:{}:{}:{flags:?}:{descriptor_type:?}:{sync_data}:{sync}:{effects:?}:{hashes_match}",
+        stat.size,
+        stat_at.size,
+        String::from_utf8_lossy(&direct),
+        String::from_utf8_lossy(&streamed)
+    )
+}

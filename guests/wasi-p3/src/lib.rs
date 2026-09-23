@@ -105,8 +105,9 @@ impl Guest for Component {
         let _ = wasi::cli::terminal_stdin::get_terminal_stdin();
         let _ = wasi::cli::terminal_stdout::get_terminal_stdout();
         let _ = wasi::cli::terminal_stderr::get_terminal_stderr();
+        let filesystem = exercise_filesystem().await;
 
-        String::from_utf8(stdin).unwrap()
+        format!("{}|{filesystem}", String::from_utf8(stdin).unwrap())
     }
 
     async fn exit_success() {
@@ -116,6 +117,169 @@ impl Guest for Component {
     async fn exit_code() {
         wasi::cli::exit::exit_with_code(7);
     }
+
+    async fn refused_open() -> bool {
+        use wasi::filesystem::types::{DescriptorFlags, ErrorCode, OpenFlags, PathFlags};
+
+        let directories = wasi::filesystem::preopens::get_directories();
+        matches!(
+            directories[0]
+                .0
+                .open_at(
+                    PathFlags::empty(),
+                    "note.txt".to_owned(),
+                    OpenFlags::empty(),
+                    DescriptorFlags::READ,
+                )
+                .await,
+            Err(ErrorCode::Access)
+        )
+    }
 }
 
 export!(Component);
+
+async fn exercise_filesystem() -> String {
+    use wasi::filesystem::types::{Advice, DescriptorFlags, NewTimestamp, OpenFlags, PathFlags};
+
+    let directories = wasi::filesystem::preopens::get_directories();
+    let root = &directories[0].0;
+    let file = root
+        .open_at(
+            PathFlags::empty(),
+            "note.txt".to_owned(),
+            OpenFlags::empty(),
+            DescriptorFlags::READ | DescriptorFlags::WRITE,
+        )
+        .await
+        .unwrap();
+
+    let _ = file.advise(0, 5, Advice::Sequential).await;
+    let sync_data = file.sync_data().await.is_ok();
+    let flags = file.get_flags().await.unwrap();
+    let descriptor_type = file.get_type().await.unwrap();
+    let _ = file.set_size(10).await;
+    let _ = file
+        .set_times(NewTimestamp::NoChange, NewTimestamp::NoChange)
+        .await;
+
+    let (mut input, read_completion) = file.read_via_stream(0);
+    let (_, streamed) = input.read(Vec::with_capacity(5)).await;
+    drop(input);
+    read_completion.await.unwrap();
+
+    let (mut writer, reader) = wit_stream::new::<u8>();
+    let write_completion = file.write_via_stream(reader, 5);
+    assert!(writer.write_all(b"write".to_vec()).await.is_empty());
+    drop(writer);
+    write_completion.await.unwrap();
+
+    let (mut writer, reader) = wit_stream::new::<u8>();
+    let append_completion = file.append_via_stream(reader);
+    assert!(writer.write_all(b"append".to_vec()).await.is_empty());
+    drop(writer);
+    append_completion.await.unwrap();
+
+    let (mut entries, entries_completion) = root.read_directory();
+    loop {
+        let (status, _) = entries.read(Vec::with_capacity(8)).await;
+        if matches!(
+            status,
+            wit_bindgen::rt::async_support::StreamResult::Dropped
+        ) {
+            break;
+        }
+    }
+    entries_completion.await.unwrap();
+    let sync = root.sync().await.is_ok();
+    let created = root.create_directory_at("created".to_owned()).await.is_ok();
+    let stat = file.stat().await.unwrap();
+    let stat_at = root
+        .stat_at(PathFlags::empty(), "note.txt".to_owned())
+        .await
+        .unwrap();
+    let _ = root
+        .set_times_at(
+            PathFlags::empty(),
+            "note.txt".to_owned(),
+            NewTimestamp::NoChange,
+            NewTimestamp::NoChange,
+        )
+        .await;
+    let linked = root
+        .link_at(
+            PathFlags::empty(),
+            "note.txt".to_owned(),
+            root,
+            "linked.txt".to_owned(),
+        )
+        .await
+        .is_ok();
+    let removed = root
+        .remove_directory_at("empty-dir".to_owned())
+        .await
+        .is_ok();
+    let renamed = root
+        .rename_at("other.txt".to_owned(), root, "renamed.txt".to_owned())
+        .await
+        .is_ok();
+    let symlinked = root
+        .symlink_at("note.txt".to_owned(), "symbolic.txt".to_owned())
+        .await
+        .is_ok();
+    let link_target = root.readlink_at("symbolic.txt".to_owned()).await.unwrap();
+    let unlinked = root.unlink_file_at("linked.txt".to_owned()).await.is_ok();
+    let same = file.is_same_object(&file).await;
+    let hash = file.metadata_hash().await.unwrap();
+    let hash_at = root
+        .metadata_hash_at(PathFlags::empty(), "note.txt".to_owned())
+        .await
+        .unwrap();
+    let hashes_match = hash.lower == hash_at.lower && hash.upper == hash_at.upper;
+    let created_exists = root
+        .stat_at(PathFlags::empty(), "created".to_owned())
+        .await
+        .is_ok();
+    let empty_removed = root
+        .stat_at(PathFlags::empty(), "empty-dir".to_owned())
+        .await
+        .is_err();
+    let note_exists = root
+        .stat_at(PathFlags::empty(), "note.txt".to_owned())
+        .await
+        .is_ok();
+    let other_removed = root
+        .stat_at(PathFlags::empty(), "other.txt".to_owned())
+        .await
+        .is_err();
+    let renamed_exists = root
+        .stat_at(PathFlags::empty(), "renamed.txt".to_owned())
+        .await
+        .is_ok();
+    let linked_removed = root
+        .stat_at(PathFlags::empty(), "linked.txt".to_owned())
+        .await
+        .is_err();
+    let effects = [
+        created,
+        created_exists,
+        removed,
+        empty_removed,
+        linked,
+        note_exists,
+        renamed,
+        other_removed,
+        renamed_exists,
+        symlinked,
+        link_target == "note.txt",
+        unlinked,
+        linked_removed,
+    ];
+
+    format!(
+        "{}:{}:{same}:{}:{flags:?}:{descriptor_type:?}:{sync_data}:{sync}:{effects:?}:{hashes_match}",
+        stat.size,
+        stat_at.size,
+        String::from_utf8_lossy(&streamed)
+    )
+}

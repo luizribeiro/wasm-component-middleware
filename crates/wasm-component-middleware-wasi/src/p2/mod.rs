@@ -30,6 +30,8 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
     RoutedInterface::from_static("wasi:cli/terminal-stdout"),
     RoutedInterface::from_static("wasi:clocks/monotonic-clock"),
     RoutedInterface::from_static("wasi:clocks/wall-clock"),
+    RoutedInterface::from_static("wasi:filesystem/preopens"),
+    RoutedInterface::from_static("wasi:filesystem/types"),
     RoutedInterface::from_static("wasi:io/error"),
     RoutedInterface::from_static("wasi:io/poll"),
     RoutedInterface::from_static("wasi:io/streams"),

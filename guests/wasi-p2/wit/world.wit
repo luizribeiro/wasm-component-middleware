@@ -8,4 +8,6 @@ world workload {
   export exit-success: func();
   export exit-code: func();
   export common-calls: func();
+  export churn-files: func();
+  export rust-std-paths: func() -> u32;
 }

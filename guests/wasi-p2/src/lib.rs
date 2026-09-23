@@ -123,6 +123,19 @@ impl Guest for Component {
         let _ = wasi::cli::terminal_stdout::get_terminal_stdout();
         let _ = wasi::cli::terminal_stderr::get_terminal_stderr();
     }
+
+    fn churn_files() {
+        for _ in 0..128 {
+            drop(std::fs::File::open("note.txt").unwrap());
+        }
+    }
+
+    fn rust_std_paths() -> u32 {
+        ["note.txt", "other.txt", "note.txt"]
+            .into_iter()
+            .map(|path| std::fs::read_to_string(path).unwrap().len() as u32)
+            .sum()
+    }
 }
 
 export!(Component);

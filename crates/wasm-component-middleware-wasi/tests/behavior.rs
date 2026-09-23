@@ -472,6 +472,14 @@ impl Harness {
             _directory: directory,
         })
     }
+
+    fn churn_files(&mut self) -> wasmtime::Result<()> {
+        self.guest.call_churn_files(&mut self.store)
+    }
+
+    fn rust_std_paths(&mut self) -> wasmtime::Result<u32> {
+        self.guest.call_rust_std_paths(&mut self.store)
+    }
 }
 
 fn run(gated: bool) -> wasmtime::Result<Observation> {
@@ -783,6 +791,87 @@ async fn refusing_p3_open_is_a_guest_visible_access_error() {
 fn gated_wasi_matches_plain_wasi() {
     assert_eq!(run(false).unwrap(), run(true).unwrap());
     assert_eq!(run_exercise(false).unwrap(), run_exercise(true).unwrap());
+}
+
+#[derive(Default)]
+struct DescriptorLifetimes {
+    live: BTreeSet<u32>,
+    seen: BTreeSet<u32>,
+    opened: usize,
+    recycled: bool,
+}
+
+#[derive(Clone)]
+struct TrackDescriptors(Arc<Mutex<DescriptorLifetimes>>);
+
+impl Layer<State> for TrackDescriptors {
+    type Frame = bool;
+
+    fn before(&self, _state: &mut State, call: &Call<'_>) -> Result<bool, Denied> {
+        if call.interface == Some("wasi:filesystem/types")
+            && call.function == "[resource-drop]descriptor"
+        {
+            let mut lifetimes = self.0.lock().unwrap();
+            for handle in call.handles {
+                lifetimes.live.remove(handle);
+            }
+        }
+        Ok(call.function == "[method]descriptor.open-at")
+    }
+
+    fn after(&self, _state: &mut State, _call: &Call<'_>, opened: bool, outcome: Outcome<'_>) {
+        if let (true, Outcome::Returned(completion)) = (opened, outcome) {
+            let mut lifetimes = self.0.lock().unwrap();
+            for handle in &completion.produced {
+                assert!(lifetimes.live.insert(*handle));
+                lifetimes.opened += 1;
+                if !lifetimes.seen.insert(*handle) {
+                    lifetimes.recycled = true;
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn descriptor_state_is_evicted_before_representations_are_recycled() {
+    let lifetimes = Arc::new(Mutex::new(DescriptorLifetimes::default()));
+    let mut harness = Harness::new(
+        true,
+        Chain::builder()
+            .layer(TrackDescriptors(Arc::clone(&lifetimes)))
+            .build(),
+    )
+    .unwrap();
+
+    harness.churn_files().unwrap();
+
+    let lifetimes = lifetimes.lock().unwrap();
+    assert_eq!(lifetimes.opened, 128);
+    assert!(lifetimes.recycled);
+    assert!(lifetimes.live.is_empty());
+}
+
+#[test]
+fn rust_std_fetches_preopens_once_for_several_paths() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut harness = Harness::new(
+        true,
+        Chain::builder().layer(Sequence(Arc::clone(&calls))).build(),
+    )
+    .unwrap();
+
+    assert_eq!(harness.rust_std_paths().unwrap(), 30);
+
+    let preopen_calls = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(interface, function)| {
+            interface == "wasi:filesystem/preopens" && function == "get-directories"
+        })
+        .count();
+    assert_eq!(preopen_calls, 1);
 }
 
 #[tokio::test]

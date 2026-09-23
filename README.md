@@ -80,8 +80,8 @@ add_to_linker_sync(&mut linker)?;
 ```
 
 The middleware linker routes `wasi:cli`, `wasi:clocks`, `wasi:filesystem`,
-and `wasi:random` on both previews, plus `wasi:io` on Preview 2. Socket
-interfaces remain on Wasmtime's direct path.
+and `wasi:random` on both previews, plus `wasi:io` and `wasi:sockets` on
+Preview 2.
 
 The [`wasi-p2` example](crates/wasm-component-middleware-wasi/examples/wasi-p2.rs)
 runs a Rust guest that reads an environment variable and the wall clock before
@@ -182,6 +182,53 @@ open public/one.txt: allowed
 open public/two.txt: allowed
 open public/three.txt: access
 ```
+
+## Sockets
+
+Preview 2 socket gates expose bind, connect, UDP stream, and datagram
+destinations through `Call::args`. An `ip-socket-address` is rendered as a
+standard `host:port` string, so a layer can use `SocketAddr` instead of
+reimplementing the WIT variants. The [`net-allowlist` example](crates/wasm-component-middleware-wasi/examples/net-allowlist.rs)
+allows one loopback destination and refuses another. Its UDP policy checks
+both the optional address passed to `udp-socket.stream` and every remote
+address passed to `outgoing-datagram-stream.send`:
+
+```rust
+let allowed = call
+    .args
+    .get("remote_address")
+    .and_then(ArgumentValue::as_str)
+    .and_then(|address| address.parse::<SocketAddr>().ok())
+    .is_some_and(|address| address == self.0);
+if allowed {
+    Ok(())
+} else {
+    Err(Denied::new("remote address is not allowed"))
+}
+```
+
+```console
+$ cargo run --example net-allowlist
+...
+→ #12 import wasi:sockets/tcp@0.2.12.[method]tcp-socket.start-connect(remote_address="127.0.0.1:62502") handles=[1, 0]
+← #12 returned
+...
+→ #25 import wasi:sockets/tcp@0.2.12.[method]tcp-socket.start-connect(remote_address="127.0.0.1:62503") handles=[1, 0]
+← #25 failed: remote address is not allowed
+...
+→ #34 import wasi:sockets/udp@0.2.12.[method]outgoing-datagram-stream.send(datagrams=[[3 bytes "udp", some("127.0.0.1:62503")]]) handles=[3]
+← #34 failed: remote address is not allowed
+...
+→ #45 import wasi:sockets/udp@0.2.12.[method]outgoing-datagram-stream.send(datagrams=[[3 bytes "udp", some("127.0.0.1:62502")]]) handles=[2]
+← #45 returned
+allowed: hello
+denied: access-denied
+udp allowed: delivered
+udp denied: access-denied
+```
+
+If a component must never use sockets, do not link the socket interfaces.
+That is cheaper and less error-prone than gating their large API surface.
 
 ## Refusing calls
 

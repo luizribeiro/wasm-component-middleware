@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
@@ -10,9 +11,10 @@ use http_body_util::Full;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use wasm_component_middleware::{
-    Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView, Outcome,
+    ArgumentValue, Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView,
+    Outcome,
 };
-use wasm_component_middleware_wasi_http::DefaultHooks;
+use wasm_component_middleware_wasi_http::{DefaultHooks, WasiHttpHooks};
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -148,8 +150,20 @@ fn engine() -> Engine {
 }
 
 fn state<H: Send>(chain: Arc<Chain<State<H>>>, hooks: H) -> State<H> {
+    state_with_socket_policy(chain, hooks, Arc::new(AtomicBool::new(false)), true)
+}
+
+fn state_with_socket_policy<H: Send>(
+    chain: Arc<Chain<State<H>>>,
+    hooks: H,
+    checked: Arc<AtomicBool>,
+    allowed: bool,
+) -> State<H> {
     let mut wasi = WasiCtxBuilder::new();
-    wasi.allow_tcp(true);
+    wasi.allow_tcp(true).socket_addr_check(move |_, _| {
+        checked.store(true, Ordering::Relaxed);
+        Box::pin(async move { allowed })
+    });
     State {
         middleware: MiddlewareCtx::new(chain, InvocationContext::new("http-client")),
         table: ResourceTable::new(),
@@ -443,4 +457,125 @@ async fn preview_3_gated_and_plain_requests_match() {
     assert_eq!(gated, plain);
     assert_resource_tracking(&calls);
     assert_wit_dispatch_coverage(&calls, "wit-p3", p3_unavailable_calls());
+}
+
+struct HookState {
+    middleware: MiddlewareCtx<Self>,
+}
+
+impl MiddlewareView for HookState {
+    fn middleware(&mut self) -> &mut MiddlewareCtx<Self> {
+        &mut self.middleware
+    }
+}
+
+struct DenyAuthority(String);
+
+impl Layer<HookState> for DenyAuthority {
+    type Frame = ();
+
+    fn before(&self, _: &mut HookState, call: &Call<'_>) -> Result<(), Denied> {
+        if call.args.get("authority").and_then(ArgumentValue::as_str) == Some(self.0.as_str()) {
+            Err(Denied::new("authority is not allowed"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn after(&self, _: &mut HookState, _: &Call<'_>, (): (), _: Outcome<'_>) {}
+}
+
+struct AllowAuthority(String);
+
+impl Layer<HookState> for AllowAuthority {
+    type Frame = ();
+
+    fn before(&self, _: &mut HookState, call: &Call<'_>) -> Result<(), Denied> {
+        if call.args.get("authority").and_then(ArgumentValue::as_str) == Some(self.0.as_str()) {
+            Ok(())
+        } else {
+            Err(Denied::new("authority is not allowed"))
+        }
+    }
+
+    fn after(&self, _: &mut HookState, _: &Call<'_>, (): (), _: Outcome<'_>) {}
+}
+
+#[tokio::test]
+async fn http_hook_denies_before_an_allowed_socket_connection() {
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let authority = listener.local_addr().unwrap().to_string();
+    let accepted = Arc::new(AtomicBool::new(false));
+    let accepted_task = Arc::clone(&accepted);
+    let server = tokio::spawn(async move {
+        if tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept())
+            .await
+            .is_ok()
+        {
+            accepted_task.store(true, Ordering::Relaxed);
+        }
+    });
+    let hook_chain = Chain::builder()
+        .layer(DenyAuthority(authority.clone()))
+        .build();
+    let hook_state = HookState {
+        middleware: MiddlewareCtx::new(hook_chain, InvocationContext::new("http-policy")),
+    };
+    let hooks = WasiHttpHooks::new(hook_state, DefaultHooks);
+    let engine = engine();
+    let component = Component::from_file(&engine, test_guests::http_p2()).unwrap();
+    let chain = Chain::builder().build();
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    wasm_component_middleware_wasi_http::p2::add_only_http_to_linker_async(&mut linker).unwrap();
+    let mut store = Store::new(&engine, state(chain, hooks));
+    let guest = p2::Client::instantiate_async(&mut store, &component, &linker)
+        .await
+        .unwrap();
+
+    let error = guest
+        .call_fetch(&mut store, &authority)
+        .await
+        .unwrap()
+        .unwrap_err();
+    server.await.unwrap();
+
+    assert!(error.contains("HttpRequestDenied"), "{error}");
+    assert!(!accepted.load(Ordering::Relaxed));
+}
+
+#[tokio::test]
+async fn allowed_http_bypasses_a_restrictive_socket_policy() {
+    let (authority, server) = server("socket policy was bypassed", 1).await;
+    let hook_chain = Chain::builder()
+        .layer(AllowAuthority(authority.clone()))
+        .build();
+    let hook_state = HookState {
+        middleware: MiddlewareCtx::new(hook_chain, InvocationContext::new("http-policy")),
+    };
+    let hooks = WasiHttpHooks::new(hook_state, DefaultHooks);
+    let engine = engine();
+    let component = Component::from_file(&engine, test_guests::http_p2()).unwrap();
+    let chain = Chain::builder().build();
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    wasm_component_middleware_wasi_http::p2::add_only_http_to_linker_async(&mut linker).unwrap();
+    let socket_check = Arc::new(AtomicBool::new(false));
+    let state = state_with_socket_policy(chain, hooks, Arc::clone(&socket_check), false);
+    let mut store = Store::new(&engine, state);
+    let guest = p2::Client::instantiate_async(&mut store, &component, &linker)
+        .await
+        .unwrap();
+
+    let result = guest
+        .call_fetch(&mut store, &authority)
+        .await
+        .unwrap()
+        .unwrap();
+    server.await.unwrap();
+
+    assert!(result.ends_with("| socket policy was bypassed"), "{result}");
+    assert!(!socket_check.load(Ordering::Relaxed));
 }

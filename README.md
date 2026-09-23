@@ -93,6 +93,20 @@ $ cargo run --example wasi-p2
 Hello from WASI at 1700000000.123456789
 ```
 
+Preview 3 uses the same one-line switch:
+
+```rust
+// use wasmtime_wasi::p3::add_to_linker;
+use wasm_component_middleware_wasi::p3::add_to_linker;
+
+add_to_linker(&mut linker)?;
+```
+
+Rust Preview 3 components still import Preview 2 through the standard library,
+so link `wasmtime_wasi::p2::add_to_linker_async` as well. The
+[`wasi-p3` example](crates/wasm-component-middleware-wasi/examples/wasi-p3.rs)
+shows both linker calls and the concurrent export invocation.
+
 ## Refusing calls
 
 The [`deny` example](crates/wasm-component-middleware/examples/deny.rs) puts a

@@ -5,7 +5,7 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::{Call, Completion, Denied, Layer, Outcome};
 
-trait ActiveLayer<S>: Send {
+pub(crate) trait ActiveLayer<S>: Send {
     fn after(self: Box<Self>, state: &mut S, call: &Call<'_>, outcome: Outcome<'_>);
 }
 
@@ -50,7 +50,7 @@ where
     }
 }
 
-type ActiveLayers<S> = Vec<Box<dyn ActiveLayer<S>>>;
+pub(crate) type ActiveLayers<S> = Vec<Box<dyn ActiveLayer<S>>>;
 
 /// An ordered, type-erased collection of middleware layers.
 pub struct Chain<S> {
@@ -114,7 +114,11 @@ impl<S: 'static> Chain<S> {
         result
     }
 
-    fn before(&self, state: &mut S, call: &Call<'_>) -> (ActiveLayers<S>, Option<Denied>) {
+    pub(crate) fn before(
+        &self,
+        state: &mut S,
+        call: &Call<'_>,
+    ) -> (ActiveLayers<S>, Option<Denied>) {
         let mut frames = Vec::with_capacity(self.layers.len());
         for layer in &self.layers {
             match Arc::clone(layer).before(state, call) {
@@ -125,7 +129,12 @@ impl<S: 'static> Chain<S> {
         (frames, None)
     }
 
-    fn after(state: &mut S, call: &Call<'_>, frames: ActiveLayers<S>, outcome: Outcome<'_>) {
+    pub(crate) fn after(
+        state: &mut S,
+        call: &Call<'_>,
+        frames: ActiveLayers<S>,
+        outcome: Outcome<'_>,
+    ) {
         for frame in frames.into_iter().rev() {
             frame.after(state, call, outcome);
         }

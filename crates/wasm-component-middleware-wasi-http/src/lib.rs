@@ -5,6 +5,7 @@
 
 mod gate;
 pub mod p2;
+pub mod p3;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 

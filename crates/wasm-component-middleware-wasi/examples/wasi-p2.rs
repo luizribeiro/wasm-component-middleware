@@ -1,6 +1,5 @@
 #![allow(missing_docs)]
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use wasm_component_middleware::{Chain, InvocationContext, Logger, MiddlewareCtx, MiddlewareView};
@@ -58,7 +57,7 @@ fn main() -> wasmtime::Result<()> {
     wasi.env("GREETING", "Hello from WASI")
         .stdout(stdout.clone())
         .wall_clock(ReviewClock);
-    let chain = Arc::new(Chain::builder().layer(Logger::stderr()).build());
+    let chain = Chain::builder().layer(Logger::stderr()).build();
     let mut store = Store::new(
         &engine,
         State {

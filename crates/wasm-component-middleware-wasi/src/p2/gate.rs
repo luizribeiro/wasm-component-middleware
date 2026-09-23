@@ -21,7 +21,7 @@ impl<T: 'static> HasData for GateData<T> {
 macro_rules! gate {
     (
         trap $gate:ident, $interface:literal, $function:literal,
-        handles = [$($handle:expr),* $(,)?], args = $args:expr,
+        handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr
     ) => {{
         gate!(
@@ -32,7 +32,7 @@ macro_rules! gate {
     }};
     (
         trap $gate:ident, $interface:literal, $function:literal,
-        handles = [$($handle:expr),* $(,)?], args = $args:expr,
+        handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr, produced = $produced:expr
     ) => {{
         gate!(
@@ -43,7 +43,7 @@ macro_rules! gate {
     }};
     (
         trap_each $gate:ident, $interface:literal, $function:literal,
-        handles = $resources:expr, args = $args:expr,
+        handles = $resources:expr, args = $args:tt,
         delegate = $delegate:expr
     ) => {{
         gate!(
@@ -54,21 +54,20 @@ macro_rules! gate {
     }};
     (
         @trap $gate:ident, $interface:literal, $function:literal,
-        handles = $handles:expr, args = $args:expr,
+        handles = $handles:expr, args = $args:tt,
         delegate = $delegate:expr, produced = $produced:expr
     ) => {{
         let chain = std::sync::Arc::clone($gate.state.middleware().chain());
         let handles: Vec<u32> = ($handles).into_iter().collect();
-        let arguments = $args;
-        let call = wasm_component_middleware::Call {
-            id: chain.next_id(),
-            direction: wasm_component_middleware::Direction::Import,
-            interface: Some($interface),
-            version: Some($crate::p2::gate::WASI_VERSION),
-            function: $function,
-            handles: &handles,
-            args: &arguments,
-        };
+        let arguments = gate!(@args $args);
+        let call = wasm_component_middleware::Call::new(
+            chain.next_id(),
+            wasm_component_middleware::Direction::Import,
+            $function,
+        )
+        .in_interface($interface, Some($crate::p2::gate::WASI_VERSION))
+        .with_handles(&handles)
+        .with_args(&arguments);
         chain.dispatch($gate.state, &call, |state| {
             let value = ($delegate)(state)?;
             let produced = ($produced)(&value);
@@ -77,7 +76,7 @@ macro_rules! gate {
     }};
     (
         stream $gate:ident, $interface:literal, $function:literal,
-        handles = [$($handle:expr),* $(,)?], args = $args:expr,
+        handles = [$($handle:expr),* $(,)?], args = $args:tt,
         delegate = $delegate:expr
     ) => {{
         let result = gate!(
@@ -90,6 +89,17 @@ macro_rules! gate {
             Err(error) => Err(wasmtime_wasi::p2::StreamError::Trap(error)),
         })
     }};
+    (@args ()) => {
+        wasm_component_middleware::Arguments::new()
+    };
+    (@args [$($name:ident = $value:expr),* $(,)?]) => {
+        wasm_component_middleware::Arguments::new()
+            $(.with(stringify!($name), $value))*
+    };
+    (@args ($($value:expr),+ $(,)?)) => {
+        wasm_component_middleware::Arguments::new()
+            $(.with_debug(stringify!($value), &$value))*
+    };
 }
 
 pub(super) use gate;

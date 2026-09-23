@@ -1,5 +1,7 @@
 use std::error::Error;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Display};
+
+static EMPTY_ARGUMENTS: Arguments = Arguments(Vec::new());
 
 /// Identifies which side of the component boundary initiated a call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,6 +23,7 @@ impl Display for Direction {
 
 /// Describes one call observed by middleware.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Call<'a> {
     /// The chain-local identifier used to correlate the call's two phases.
     pub id: u64,
@@ -34,11 +37,260 @@ pub struct Call<'a> {
     pub function: &'a str,
     /// Resource representations consumed by the call.
     pub handles: &'a [u32],
-    /// A type-erased, read-only view used for diagnostics.
-    ///
-    /// The concrete shape of this field may change before version 1.0 as the
-    /// component-value inspection API develops.
-    pub args: &'a (dyn Debug + Send + Sync),
+    /// A typed, read-only view of the call's non-resource arguments.
+    pub args: &'a Arguments,
+}
+
+impl<'a> Call<'a> {
+    /// Describes a call with no interface, resource handles, or arguments.
+    #[must_use]
+    pub const fn new(id: u64, direction: Direction, function: &'a str) -> Self {
+        Self {
+            id,
+            direction,
+            interface: None,
+            version: None,
+            function,
+            handles: &[],
+            args: &EMPTY_ARGUMENTS,
+        }
+    }
+
+    /// Associates the call with a WIT interface and optional version.
+    #[must_use]
+    pub const fn in_interface(mut self, interface: &'a str, version: Option<&'a str>) -> Self {
+        self.interface = Some(interface);
+        self.version = version;
+        self
+    }
+
+    /// Records resource representations consumed by the call.
+    #[must_use]
+    pub const fn with_handles(mut self, handles: &'a [u32]) -> Self {
+        self.handles = handles;
+        self
+    }
+
+    /// Records a typed view of the call's non-resource arguments.
+    #[must_use]
+    pub const fn with_args(mut self, args: &'a Arguments) -> Self {
+        self.args = args;
+        self
+    }
+}
+
+/// A named, typed view of a call's non-resource arguments.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Arguments(Vec<Argument>);
+
+impl Arguments {
+    /// Creates an empty argument view.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Adds a named argument.
+    #[must_use]
+    pub fn with(mut self, name: &'static str, value: impl Into<ArgumentValue>) -> Self {
+        self.0.push(Argument {
+            name,
+            value: value.into(),
+        });
+        self
+    }
+
+    /// Adds a diagnostic-only argument when no typed conversion is available.
+    #[must_use]
+    pub fn with_debug(mut self, name: &'static str, value: &impl fmt::Debug) -> Self {
+        self.0.push(Argument {
+            name,
+            value: ArgumentValue::Debug(format!("{value:?}")),
+        });
+        self
+    }
+
+    /// Returns the value of the named argument.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&ArgumentValue> {
+        self.0
+            .iter()
+            .find(|argument| argument.name == name)
+            .map(|argument| &argument.value)
+    }
+
+    /// Iterates over the arguments in WIT parameter order.
+    #[must_use]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &ArgumentValue)> {
+        self.0
+            .iter()
+            .map(|argument| (argument.name, &argument.value))
+    }
+
+    /// Returns whether there are no non-resource arguments.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Display for Arguments {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, argument) in self.0.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str(", ")?;
+            }
+            write!(formatter, "{}={}", argument.name, argument.value)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Argument {
+    name: &'static str,
+    value: ArgumentValue,
+}
+
+/// A policy-readable component value copied before owned parameters are moved.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ArgumentValue {
+    /// A Boolean value.
+    Bool(bool),
+    /// A signed integer value.
+    Signed(i64),
+    /// An unsigned integer value.
+    Unsigned(u64),
+    /// A string value.
+    String(String),
+    /// A byte list, kept compact for inspection and logging.
+    Bytes(Vec<u8>),
+    /// A list of component values.
+    List(Vec<Self>),
+    /// A variant case with an optional payload.
+    Variant {
+        /// The WIT case name.
+        case: &'static str,
+        /// The case payload, when present.
+        value: Option<Box<Self>>,
+    },
+    /// A diagnostic representation for values without a typed projection.
+    Debug(String),
+}
+
+impl ArgumentValue {
+    /// Creates a byte-list value.
+    #[must_use]
+    pub fn bytes(value: impl Into<Vec<u8>>) -> Self {
+        Self::Bytes(value.into())
+    }
+
+    /// Creates a variant case without a payload.
+    #[must_use]
+    pub const fn case(case: &'static str) -> Self {
+        Self::Variant { case, value: None }
+    }
+
+    /// Returns this value as a string when it has string type.
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Returns this value as bytes when it has byte-list type.
+    #[must_use]
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Bytes(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Returns this value as an unsigned integer when possible.
+    #[must_use]
+    pub const fn as_u64(&self) -> Option<u64> {
+        match self {
+            Self::Unsigned(value) => Some(*value),
+            _ => None,
+        }
+    }
+}
+
+impl Display for ArgumentValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bool(value) => Display::fmt(value, formatter),
+            Self::Signed(value) => Display::fmt(value, formatter),
+            Self::Unsigned(value) => Display::fmt(value, formatter),
+            Self::String(value) => write!(formatter, "{value:?}"),
+            Self::Bytes(value) => {
+                const PREVIEW: usize = 24;
+                let preview = value
+                    .iter()
+                    .take(PREVIEW)
+                    .map(|byte| match byte {
+                        b' '..=b'~' => char::from(*byte),
+                        _ => '.',
+                    })
+                    .collect::<String>();
+                let ellipsis = if value.len() > PREVIEW { "…" } else { "" };
+                write!(formatter, "{} bytes \"{preview}{ellipsis}\"", value.len())
+            }
+            Self::List(values) => {
+                formatter.write_str("[")?;
+                for (index, value) in values.iter().enumerate() {
+                    if index != 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    Display::fmt(value, formatter)?;
+                }
+                formatter.write_str("]")
+            }
+            Self::Variant { case, value: None } => formatter.write_str(case),
+            Self::Variant {
+                case,
+                value: Some(value),
+            } => write!(formatter, "{case}({value})"),
+            Self::Debug(value) => formatter.write_str(value),
+        }
+    }
+}
+
+impl From<bool> for ArgumentValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+macro_rules! integer_values {
+    ($variant:ident: $($type:ty),+ $(,)?) => {
+        $(
+            impl From<$type> for ArgumentValue {
+                fn from(value: $type) -> Self {
+                    Self::$variant(value.into())
+                }
+            }
+        )+
+    };
+}
+
+integer_values!(Unsigned: u8, u16, u32, u64);
+integer_values!(Signed: i8, i16, i32, i64);
+
+impl From<String> for ArgumentValue {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for ArgumentValue {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_owned())
+    }
 }
 
 /// Describes resources produced by a completed call.
@@ -107,7 +359,23 @@ pub trait Layer<S>: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use super::Denied;
+    use super::{ArgumentValue, Arguments, Denied};
+
+    #[test]
+    fn typed_arguments_support_policy_lookup() {
+        let args = Arguments::new()
+            .with("path", "config/settings.toml")
+            .with("bytes", ArgumentValue::bytes(b"hello".to_vec()));
+
+        assert_eq!(
+            args.get("path").and_then(ArgumentValue::as_str),
+            Some("config/settings.toml")
+        );
+        assert_eq!(
+            args.get("bytes").and_then(ArgumentValue::as_bytes),
+            Some(b"hello".as_slice())
+        );
+    }
 
     #[test]
     fn denial_survives_wasmtime_error_conversion() {

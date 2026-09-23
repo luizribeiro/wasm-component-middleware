@@ -32,11 +32,11 @@ where
     T: WasiView + MiddlewareView + 'static,
 {
     fn exit(&mut self, status: Result<(), ()>) -> wasmtime::Result<()> {
-        gate!(trap self, "wasi:cli/exit", "exit", handles = [], args = (status,), delegate = |state: &mut T| exit::Host::exit(&mut state.cli(), status))
+        gate!(trap self, "wasi:cli/exit", "exit", handles = [], args = [status = wasm_component_middleware::ArgumentValue::case(if status.is_ok() { "ok" } else { "err" })], delegate = |state: &mut T| exit::Host::exit(&mut state.cli(), status))
     }
 
     fn exit_with_code(&mut self, status_code: u8) -> wasmtime::Result<()> {
-        gate!(trap self, "wasi:cli/exit", "exit-with-code", handles = [], args = (status_code,), delegate = |state: &mut T| exit::Host::exit_with_code(&mut state.cli(), status_code))
+        gate!(trap self, "wasi:cli/exit", "exit-with-code", handles = [], args = [status_code = status_code], delegate = |state: &mut T| exit::Host::exit_with_code(&mut state.cli(), status_code))
     }
 }
 

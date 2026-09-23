@@ -2,8 +2,6 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
-
 use wasm_component_middleware::{
     Chain, InvocationContext, MiddlewareCtx, MiddlewareView, verify_routing,
 };
@@ -105,7 +103,7 @@ fn linker_still_rejects_duplicate_definitions() {
 fn state() -> State {
     State {
         middleware: Some(MiddlewareCtx::new(
-            Arc::new(Chain::builder().build()),
+            Chain::builder().build(),
             InvocationContext::new("coverage"),
         )),
         table: ResourceTable::new(),

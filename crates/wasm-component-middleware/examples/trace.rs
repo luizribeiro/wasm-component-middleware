@@ -1,10 +1,8 @@
 #![allow(missing_docs)]
 
-use std::sync::Arc;
-
 use wasm_component_middleware::{
-    Chain, InvocationContext, Logger, MiddlewareCtx, MiddlewareView, Routed, route_export,
-    route_imports, verify_routing,
+    Arguments, Chain, InvocationContext, Logger, MiddlewareCtx, MiddlewareView, Routed,
+    route_export, route_imports, verify_routing,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{AsContextMut, Engine, Store};
@@ -62,7 +60,7 @@ fn main() -> wasmtime::Result<()> {
     example::hello::host::add_to_linker::<_, Routed<State>>(&mut linker, Routed::<State>::get)?;
     verify_routing(&engine, &component, [HELLO_HOST], ["wasi:"])?;
 
-    let chain = Arc::new(Chain::builder().layer(Logger::stderr()).build());
+    let chain = Chain::builder().layer(Logger::stderr()).build();
     let mut store = Store::new(
         &engine,
         State {
@@ -72,7 +70,8 @@ fn main() -> wasmtime::Result<()> {
         },
     );
     let hello = Hello::instantiate(&mut store, &component, &linker)?;
-    let greeting = route_export(store.as_context_mut(), None, "greet", &"Hello", |store| {
+    let args = Arguments::new().with("greeting", "Hello");
+    let greeting = route_export(store.as_context_mut(), None, "greet", &args, |store| {
         hello.call_greet(store, "Hello")
     })?;
 

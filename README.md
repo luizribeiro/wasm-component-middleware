@@ -10,7 +10,7 @@ The [`trace` example](crates/wasm-component-middleware/examples/trace.rs) builds
 a chain with the included logger:
 
 ```rust
-let chain = Arc::new(Chain::builder().layer(Logger::stderr()).build());
+let chain = Chain::builder().layer(Logger::stderr()).build();
 let mut store = Store::new(
     &engine,
     State {
@@ -58,10 +58,10 @@ Run it from the repository root:
 
 ```console
 $ cargo run --example trace
-→ #1 export greet("Hello")
+→ #1 export greet(greeting="Hello")
   → #2 import example:hello/host.user-name()
   ← #2 returned
-  → #3 import example:hello/host.log("greeting Ada")
+  → #3 import example:hello/host.log(message="greeting Ada")
   ← #3 returned
 ← #1 returned
 Hello, Ada!

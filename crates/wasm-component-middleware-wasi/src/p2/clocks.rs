@@ -36,14 +36,14 @@ where
         &mut self,
         when: monotonic_clock::Instant,
     ) -> wasmtime::Result<Resource<DynPollable>> {
-        gate!(trap self, "wasi:clocks/monotonic-clock", "subscribe-instant", handles = [], args = (when,), delegate = |state: &mut T| monotonic_clock::Host::subscribe_instant(&mut state.clocks(), when), produced = |value: &Resource<DynPollable>| vec![value.rep()])
+        gate!(trap self, "wasi:clocks/monotonic-clock", "subscribe-instant", handles = [], args = [when = when], delegate = |state: &mut T| monotonic_clock::Host::subscribe_instant(&mut state.clocks(), when), produced = |value: &Resource<DynPollable>| vec![value.rep()])
     }
 
     fn subscribe_duration(
         &mut self,
         duration: monotonic_clock::Duration,
     ) -> wasmtime::Result<Resource<DynPollable>> {
-        gate!(trap self, "wasi:clocks/monotonic-clock", "subscribe-duration", handles = [], args = (duration,), delegate = |state: &mut T| monotonic_clock::Host::subscribe_duration(&mut state.clocks(), duration), produced = |value: &Resource<DynPollable>| vec![value.rep()])
+        gate!(trap self, "wasi:clocks/monotonic-clock", "subscribe-duration", handles = [], args = [duration = duration], delegate = |state: &mut T| monotonic_clock::Host::subscribe_duration(&mut state.clocks(), duration), produced = |value: &Resource<DynPollable>| vec![value.rep()])
     }
 }
 
@@ -57,8 +57,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use wasm_component_middleware::{
         Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, Outcome,
     };
@@ -104,7 +102,7 @@ mod tests {
 
     #[test]
     fn wall_clock_dispatches_through_the_chain() {
-        let chain = Arc::new(Chain::builder().layer(Count).build());
+        let chain = Chain::builder().layer(Count).build();
         let mut state = State {
             middleware: Some(MiddlewareCtx::new(chain, InvocationContext::new("clock"))),
             table: ResourceTable::new(),

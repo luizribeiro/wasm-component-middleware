@@ -138,15 +138,7 @@ mod tests {
     }
 
     fn call() -> Call<'static> {
-        Call {
-            id: 1,
-            direction: Direction::Import,
-            interface: None,
-            version: None,
-            function: "work",
-            handles: &[],
-            args: &(),
-        }
+        Call::new(1, Direction::Import, "work")
     }
 
     fn run_ready<F: Future>(future: F) -> F::Output {

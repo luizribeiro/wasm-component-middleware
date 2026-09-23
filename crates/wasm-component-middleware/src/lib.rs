@@ -18,5 +18,5 @@ pub use chain::{Chain, ChainBuilder};
 pub use context::{InvocationContext, MiddlewareCtx, MiddlewareView};
 pub use logger::Logger;
 pub use routing::{Routed, RoutedInterface, Routing, dispatch_import, route_export};
-pub use types::{Call, Completion, Denied, Direction, Layer, Outcome};
+pub use types::{ArgumentValue, Arguments, Call, Completion, Denied, Direction, Layer, Outcome};
 pub use verification::{Unrouted, verify_routing};

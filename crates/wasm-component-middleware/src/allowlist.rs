@@ -71,14 +71,10 @@ mod tests {
     use crate::{Allowlist, Call, Direction, Layer};
 
     fn call<'a>(direction: Direction, interface: Option<&'a str>, function: &'a str) -> Call<'a> {
-        Call {
-            id: 1,
-            direction,
-            interface,
-            version: None,
-            function,
-            handles: &[],
-            args: &(),
+        let call = Call::new(1, direction, function);
+        match interface {
+            Some(interface) => call.in_interface(interface, None),
+            None => call,
         }
     }
 

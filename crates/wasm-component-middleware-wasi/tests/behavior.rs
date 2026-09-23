@@ -259,7 +259,7 @@ struct Harness {
 }
 
 impl Harness {
-    fn new(gated: bool, chain: Chain<State>) -> wasmtime::Result<Self> {
+    fn new(gated: bool, chain: Arc<Chain<State>>) -> wasmtime::Result<Self> {
         let engine = Engine::default();
         let component = Component::from_file(&engine, test_guests::wasi_p2())?;
         let mut linker = Linker::new(&engine);
@@ -296,7 +296,7 @@ impl Harness {
             &engine,
             State {
                 middleware: Some(MiddlewareCtx::new(
-                    Arc::new(chain),
+                    chain,
                     InvocationContext::new("workload"),
                 )),
                 table: ResourceTable::new(),
@@ -538,8 +538,8 @@ fn wasi_example_prints_the_trace_and_guest_output() {
             "→ #2 import wasi:clocks/wall-clock@0.2.12.now()\n",
             "← #2 returned\n",
             "→ #3 import wasi:cli/stdout@0.2.12.get-stdout()\n",
-            "← #3 returned\n",
-            "→ #4 import wasi:io/streams@0.2.12.[method]output-stream.blocking-write-and-flush(([72, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 87, 65, 83, 73, 32, 97, 116, 32, 49, 55, 48, 48, 48, 48, 48, 48, 48, 48, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 10],))\n",
+            "← #3 returned produced=[0]\n",
+            "→ #4 import wasi:io/streams@0.2.12.[method]output-stream.blocking-write-and-flush(bytes=40 bytes \"Hello from WASI at 17000…\")\n",
             "← #4 returned\n",
             "→ #5 import wasi:io/streams@0.2.12.[resource-drop]output-stream()\n",
             "← #5 returned\n",

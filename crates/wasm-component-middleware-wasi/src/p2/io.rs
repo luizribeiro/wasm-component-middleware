@@ -68,7 +68,7 @@ where
     }
 
     fn read(&mut self, stream: Resource<streams::InputStream>, len: u64) -> StreamResult<Vec<u8>> {
-        gate!(stream self, "wasi:io/streams", "[method]input-stream.read", handles = [stream], args = (len,), delegate = |state: &mut T| streams::HostInputStream::read(state.ctx().table, stream, len))
+        gate!(stream self, "wasi:io/streams", "[method]input-stream.read", handles = [stream], args = [len = len], delegate = |state: &mut T| streams::HostInputStream::read(state.ctx().table, stream, len))
     }
 
     fn blocking_read(
@@ -76,11 +76,11 @@ where
         stream: Resource<streams::InputStream>,
         len: u64,
     ) -> StreamResult<Vec<u8>> {
-        gate!(stream self, "wasi:io/streams", "[method]input-stream.blocking-read", handles = [stream], args = (len,), delegate = |state: &mut T| streams::HostInputStream::blocking_read(state.ctx().table, stream, len))
+        gate!(stream self, "wasi:io/streams", "[method]input-stream.blocking-read", handles = [stream], args = [len = len], delegate = |state: &mut T| streams::HostInputStream::blocking_read(state.ctx().table, stream, len))
     }
 
     fn skip(&mut self, stream: Resource<streams::InputStream>, len: u64) -> StreamResult<u64> {
-        gate!(stream self, "wasi:io/streams", "[method]input-stream.skip", handles = [stream], args = (len,), delegate = |state: &mut T| streams::HostInputStream::skip(state.ctx().table, stream, len))
+        gate!(stream self, "wasi:io/streams", "[method]input-stream.skip", handles = [stream], args = [len = len], delegate = |state: &mut T| streams::HostInputStream::skip(state.ctx().table, stream, len))
     }
 
     fn blocking_skip(
@@ -88,7 +88,7 @@ where
         stream: Resource<streams::InputStream>,
         len: u64,
     ) -> StreamResult<u64> {
-        gate!(stream self, "wasi:io/streams", "[method]input-stream.blocking-skip", handles = [stream], args = (len,), delegate = |state: &mut T| streams::HostInputStream::blocking_skip(state.ctx().table, stream, len))
+        gate!(stream self, "wasi:io/streams", "[method]input-stream.blocking-skip", handles = [stream], args = [len = len], delegate = |state: &mut T| streams::HostInputStream::blocking_skip(state.ctx().table, stream, len))
     }
 
     fn subscribe(
@@ -116,7 +116,7 @@ where
         stream: Resource<streams::OutputStream>,
         bytes: Vec<u8>,
     ) -> StreamResult<()> {
-        gate!(stream self, "wasi:io/streams", "[method]output-stream.write", handles = [stream], args = (bytes.clone(),), delegate = |state: &mut T| streams::HostOutputStream::write(state.ctx().table, stream, bytes))
+        gate!(stream self, "wasi:io/streams", "[method]output-stream.write", handles = [stream], args = [bytes = wasm_component_middleware::ArgumentValue::bytes(bytes.clone())], delegate = |state: &mut T| streams::HostOutputStream::write(state.ctx().table, stream, bytes))
     }
 
     fn blocking_write_and_flush(
@@ -124,7 +124,7 @@ where
         stream: Resource<streams::OutputStream>,
         bytes: Vec<u8>,
     ) -> StreamResult<()> {
-        gate!(stream self, "wasi:io/streams", "[method]output-stream.blocking-write-and-flush", handles = [stream], args = (bytes.clone(),), delegate = |state: &mut T| streams::HostOutputStream::blocking_write_and_flush(state.ctx().table, stream, bytes))
+        gate!(stream self, "wasi:io/streams", "[method]output-stream.blocking-write-and-flush", handles = [stream], args = [bytes = wasm_component_middleware::ArgumentValue::bytes(bytes.clone())], delegate = |state: &mut T| streams::HostOutputStream::blocking_write_and_flush(state.ctx().table, stream, bytes))
     }
 
     fn blocking_write_zeroes_and_flush(
@@ -132,7 +132,7 @@ where
         stream: Resource<streams::OutputStream>,
         len: u64,
     ) -> StreamResult<()> {
-        gate!(stream self, "wasi:io/streams", "[method]output-stream.blocking-write-zeroes-and-flush", handles = [stream], args = (len,), delegate = |state: &mut T| streams::HostOutputStream::blocking_write_zeroes_and_flush(state.ctx().table, stream, len))
+        gate!(stream self, "wasi:io/streams", "[method]output-stream.blocking-write-zeroes-and-flush", handles = [stream], args = [len = len], delegate = |state: &mut T| streams::HostOutputStream::blocking_write_zeroes_and_flush(state.ctx().table, stream, len))
     }
 
     fn subscribe(
@@ -147,7 +147,7 @@ where
         stream: Resource<streams::OutputStream>,
         len: u64,
     ) -> StreamResult<()> {
-        gate!(stream self, "wasi:io/streams", "[method]output-stream.write-zeroes", handles = [stream], args = (len,), delegate = |state: &mut T| streams::HostOutputStream::write_zeroes(state.ctx().table, stream, len))
+        gate!(stream self, "wasi:io/streams", "[method]output-stream.write-zeroes", handles = [stream], args = [len = len], delegate = |state: &mut T| streams::HostOutputStream::write_zeroes(state.ctx().table, stream, len))
     }
 
     fn flush(&mut self, stream: Resource<streams::OutputStream>) -> StreamResult<()> {
@@ -164,7 +164,7 @@ where
         source: Resource<streams::InputStream>,
         len: u64,
     ) -> StreamResult<u64> {
-        gate!(stream self, "wasi:io/streams", "[method]output-stream.splice", handles = [destination, source], args = (len,), delegate = |state: &mut T| streams::HostOutputStream::splice(state.ctx().table, destination, source, len))
+        gate!(stream self, "wasi:io/streams", "[method]output-stream.splice", handles = [destination, source], args = [len = len], delegate = |state: &mut T| streams::HostOutputStream::splice(state.ctx().table, destination, source, len))
     }
 
     fn blocking_splice(
@@ -173,7 +173,7 @@ where
         source: Resource<streams::InputStream>,
         len: u64,
     ) -> StreamResult<u64> {
-        gate!(stream self, "wasi:io/streams", "[method]output-stream.blocking-splice", handles = [destination, source], args = (len,), delegate = |state: &mut T| streams::HostOutputStream::blocking_splice(state.ctx().table, destination, source, len))
+        gate!(stream self, "wasi:io/streams", "[method]output-stream.blocking-splice", handles = [destination, source], args = [len = len], delegate = |state: &mut T| streams::HostOutputStream::blocking_splice(state.ctx().table, destination, source, len))
     }
 }
 

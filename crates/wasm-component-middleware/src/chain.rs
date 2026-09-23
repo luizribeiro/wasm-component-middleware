@@ -163,11 +163,11 @@ impl<S: 'static> ChainBuilder<S> {
 
     /// Finishes the chain and starts its call identifiers at one.
     #[must_use]
-    pub fn build(self) -> Chain<S> {
-        Chain {
+    pub fn build(self) -> Arc<Chain<S>> {
+        Arc::new(Chain {
             layers: self.layers,
             next_id: AtomicU64::new(1),
-        }
+        })
     }
 }
 
@@ -213,15 +213,7 @@ mod tests {
     }
 
     fn call(id: u64) -> Call<'static> {
-        Call {
-            id,
-            direction: Direction::Import,
-            interface: Some("example:test/host"),
-            version: None,
-            function: "work",
-            handles: &[],
-            args: &(),
-        }
+        Call::new(id, Direction::Import, "work").in_interface("example:test/host", None)
     }
 
     #[test]

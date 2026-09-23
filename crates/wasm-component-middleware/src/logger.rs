@@ -95,8 +95,6 @@ where
         let invocation = state.middleware().context().id();
         let depth = self.begin_call(invocation);
 
-        let args = format!("{:?}", call.args);
-        let args = if args == "()" { "" } else { &args };
         let interface = call.interface.map_or(String::new(), |interface| {
             call.version.map_or_else(
                 || format!("{interface}."),
@@ -110,6 +108,7 @@ where
             call.id,
             call.direction,
             call.function,
+            args = call.args,
         );
         Ok((invocation, depth))
     }
@@ -118,7 +117,10 @@ where
         let (invocation, depth) = frame;
         self.end_call(invocation);
         let outcome = match outcome {
-            Outcome::Returned(_) => "returned".to_owned(),
+            Outcome::Returned(completion) if completion.produced.is_empty() => {
+                "returned".to_owned()
+            }
+            Outcome::Returned(completion) => format!("returned produced={:?}", completion.produced),
             Outcome::Failed(error) => error.downcast_ref::<Denied>().map_or_else(
                 || format!("failed: {error}"),
                 |denied| format!("failed: {denied}"),
@@ -139,8 +141,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        Call, Chain, Completion, Direction, InvocationContext, Logger, MiddlewareCtx,
-        MiddlewareView, Outcome,
+        ArgumentValue, Arguments, Call, Chain, Completion, Direction, InvocationContext, Logger,
+        MiddlewareCtx, MiddlewareView, Outcome,
     };
 
     struct State {
@@ -157,34 +159,20 @@ mod tests {
     fn indents_an_import_nested_inside_an_export() {
         let logger = Logger::new(Vec::new());
         let output = logger.writer();
-        let chain = Arc::new(Chain::builder().layer(logger).build());
+        let chain = Chain::builder().layer(logger).build();
         let mut state = State {
             middleware: Some(MiddlewareCtx::new(
                 Arc::clone(&chain),
                 InvocationContext::new("greeter"),
             )),
         };
-        let export = Call {
-            id: chain.next_id(),
-            direction: Direction::Export,
-            interface: None,
-            version: None,
-            function: "greet",
-            handles: &[],
-            args: &"Hello",
-        };
+        let args = Arguments::new().with("greeting", "Hello");
+        let export = Call::new(chain.next_id(), Direction::Export, "greet").with_args(&args);
 
         chain
             .dispatch(&mut state, &export, |state| {
-                let import = Call {
-                    id: chain.next_id(),
-                    direction: Direction::Import,
-                    interface: Some("example:hello/host"),
-                    version: Some("1.0.0"),
-                    function: "user-name",
-                    handles: &[],
-                    args: &(),
-                };
+                let import = Call::new(chain.next_id(), Direction::Import, "user-name")
+                    .in_interface("example:hello/host", Some("1.0.0"));
                 chain.dispatch(state, &import, |_| Ok(((), Completion::default())))?;
                 Ok(((), Completion::default()))
             })
@@ -194,7 +182,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).unwrap(),
             concat!(
-                "→ #1 export greet(\"Hello\")\n",
+                "→ #1 export greet(greeting=\"Hello\")\n",
                 "  → #2 import example:hello/host@1.0.0.user-name()\n",
                 "  ← #2 returned\n",
                 "← #1 returned\n",
@@ -206,31 +194,15 @@ mod tests {
     fn overlapping_calls_finish_out_of_order_without_stale_depth() {
         let logger = Logger::new(Vec::new());
         let output = logger.writer();
-        let chain = Arc::new(Chain::builder().layer(logger).build());
+        let chain = Chain::builder().layer(logger).build();
         let mut state = State {
             middleware: Some(MiddlewareCtx::new(
                 Arc::clone(&chain),
                 InvocationContext::new("greeter"),
             )),
         };
-        let first = Call {
-            id: chain.next_id(),
-            direction: Direction::Import,
-            interface: None,
-            version: None,
-            function: "first",
-            handles: &[],
-            args: &(),
-        };
-        let second = Call {
-            id: chain.next_id(),
-            direction: Direction::Import,
-            interface: None,
-            version: None,
-            function: "second",
-            handles: &[],
-            args: &(),
-        };
+        let first = Call::new(chain.next_id(), Direction::Import, "first");
+        let second = Call::new(chain.next_id(), Direction::Import, "second");
         let (first_frames, first_denial) = chain.before(&mut state, &first);
         let (second_frames, second_denial) = chain.before(&mut state, &second);
         let completion = Completion::default();
@@ -249,15 +221,7 @@ mod tests {
             second_frames,
             Outcome::Returned(&completion),
         );
-        let third = Call {
-            id: chain.next_id(),
-            direction: Direction::Import,
-            interface: None,
-            version: None,
-            function: "third",
-            handles: &[],
-            args: &(),
-        };
+        let third = Call::new(chain.next_id(), Direction::Import, "third");
         chain
             .dispatch(&mut state, &third, |_| Ok(((), Completion::default())))
             .unwrap();
@@ -282,32 +246,30 @@ mod tests {
         let outer_output = outer.writer();
         let inner = Logger::new(Vec::new());
         let inner_output = inner.writer();
-        let chain = Arc::new(Chain::builder().layer(outer).layer(inner).build());
+        let chain = Chain::builder().layer(outer).layer(inner).build();
         let mut state = State {
             middleware: Some(MiddlewareCtx::new(
                 Arc::clone(&chain),
                 InvocationContext::new("greeter"),
             )),
         };
-        let call = Call {
-            id: chain.next_id(),
-            direction: Direction::Export,
-            interface: None,
-            version: None,
-            function: "greet",
-            handles: &[],
-            args: &"Hello",
-        };
+        let args = Arguments::new().with(
+            "message",
+            ArgumentValue::bytes(b"Hello, middleware!".to_vec()),
+        );
+        let call = Call::new(chain.next_id(), Direction::Export, "greet").with_args(&args);
 
         chain
-            .dispatch(&mut state, &call, |_| Ok(((), Completion::default())))
+            .dispatch(&mut state, &call, |_| {
+                Ok(((), Completion { produced: vec![7] }))
+            })
             .unwrap();
 
         for output in [outer_output, inner_output] {
             let bytes = output.lock().unwrap().clone();
             assert_eq!(
                 String::from_utf8(bytes).unwrap(),
-                "→ #1 export greet(\"Hello\")\n← #1 returned\n"
+                "→ #1 export greet(message=18 bytes \"Hello, middleware!\")\n← #1 returned produced=[7]\n"
             );
         }
     }

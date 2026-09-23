@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn middleware_context_retains_chain_and_invocation() {
-        let chain = Arc::new(Chain::<State>::builder().build());
+        let chain = Chain::<State>::builder().build();
         let context = MiddlewareCtx::new(Arc::clone(&chain), InvocationContext::new("greeter"));
 
         assert!(Arc::ptr_eq(context.chain(), &chain));

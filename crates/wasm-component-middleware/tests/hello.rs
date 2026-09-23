@@ -5,8 +5,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use wasm_component_middleware::{
-    Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView, Outcome, Routed,
-    route_export, route_imports, verify_routing,
+    Arguments, Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView,
+    Outcome, Routed, route_export, route_imports, verify_routing,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{AsContextMut, Engine, Store};
@@ -105,7 +105,7 @@ impl Layer<State> for DenyUserName {
     fn after(&self, _state: &mut State, _call: &Call<'_>, (): (), _outcome: Outcome<'_>) {}
 }
 
-fn invoke(chain: Chain<State>, user_name: UserName) -> wasmtime::Result<String> {
+fn invoke(chain: Arc<Chain<State>>, user_name: UserName) -> wasmtime::Result<String> {
     let engine = Engine::default();
     let component = Component::from_file(&engine, test_guests::hello())?;
     let mut linker = Linker::new(&engine);
@@ -115,7 +115,7 @@ fn invoke(chain: Chain<State>, user_name: UserName) -> wasmtime::Result<String> 
     let mut store = Store::new(
         &engine,
         State {
-            middleware: MiddlewareCtx::new(Arc::new(chain), InvocationContext::new("hello")),
+            middleware: MiddlewareCtx::new(chain, InvocationContext::new("hello")),
             table: ResourceTable::new(),
             wasi: WasiCtxBuilder::new().build(),
             user_name,
@@ -123,7 +123,8 @@ fn invoke(chain: Chain<State>, user_name: UserName) -> wasmtime::Result<String> 
     );
     let hello = Hello::instantiate(&mut store, &component, &linker)?;
 
-    route_export(store.as_context_mut(), None, "greet", &"Hello", |store| {
+    let args = Arguments::new().with("greeting", "Hello");
+    route_export(store.as_context_mut(), None, "greet", &args, |store| {
         hello.call_greet(store, "Hello")
     })
 }
@@ -181,7 +182,7 @@ fn trace_example_prints_nested_calls_and_greeting() {
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "Hello, Ada!\n");
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
-        "→ #1 export greet(\"Hello\")\n  → #2 import example:hello/host.user-name()\n  ← #2 returned\n  → #3 import example:hello/host.log(\"greeting Ada\")\n  ← #3 returned\n← #1 returned\n"
+        "→ #1 export greet(greeting=\"Hello\")\n  → #2 import example:hello/host.user-name()\n  ← #2 returned\n  → #3 import example:hello/host.log(message=\"greeting Ada\")\n  ← #3 returned\n← #1 returned\n"
     );
 }
 
@@ -206,16 +207,16 @@ fn deny_example_refuses_one_store_and_allows_the_next() {
         String::from_utf8(output.stderr).unwrap(),
         concat!(
             "denied:\n",
-            "→ #1 export greet(\"Hello\")\n",
+            "→ #1 export greet(greeting=\"Hello\")\n",
             "  → #2 import example:hello/host.user-name()\n",
             "  ← #2 failed: import example:hello/host.user-name is not allowed\n",
             "← #1 failed: import example:hello/host.user-name is not allowed\n",
             "greet failed: import example:hello/host.user-name is not allowed\n",
             "allowed:\n",
-            "→ #1 export greet(\"Hello\")\n",
+            "→ #1 export greet(greeting=\"Hello\")\n",
             "  → #2 import example:hello/host.user-name()\n",
             "  ← #2 returned\n",
-            "  → #3 import example:hello/host.log(\"greeting Ada\")\n",
+            "  → #3 import example:hello/host.log(message=\"greeting Ada\")\n",
             "  ← #3 returned\n",
             "← #1 returned\n",
             "Hello, Ada!\n",

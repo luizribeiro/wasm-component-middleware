@@ -1,11 +1,10 @@
-use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use wasmtime::StoreContextMut;
 use wasmtime::component::HasData;
 
-use crate::{Call, Completion, Direction, MiddlewareView};
+use crate::{Arguments, Call, Completion, Direction, MiddlewareView};
 
 /// Identifies an interface implemented through [`route_imports!`](crate::route_imports).
 ///
@@ -72,7 +71,7 @@ impl<S: MiddlewareView + 'static> Routing<'_, S> {
         &mut self,
         interface: &'static str,
         function: &str,
-        args: &(dyn Debug + Send + Sync),
+        args: &Arguments,
         body: impl FnOnce(&mut S) -> wasmtime::Result<R>,
     ) -> wasmtime::Result<R> {
         dispatch_import(self.state, Some(interface), function, args, body)
@@ -91,22 +90,17 @@ pub fn dispatch_import<S, R>(
     state: &mut S,
     interface: Option<&str>,
     function: &str,
-    args: &(dyn Debug + Send + Sync),
+    args: &Arguments,
     body: impl FnOnce(&mut S) -> wasmtime::Result<R>,
 ) -> wasmtime::Result<R>
 where
     S: MiddlewareView + 'static,
 {
     let chain = Arc::clone(state.middleware().chain());
-    let call = Call {
-        id: chain.next_id(),
-        direction: Direction::Import,
-        interface,
-        version: None,
-        function,
-        handles: &[],
-        args,
-    };
+    let mut call = Call::new(chain.next_id(), Direction::Import, function).with_args(args);
+    if let Some(interface) = interface {
+        call = call.in_interface(interface, None);
+    }
     chain.dispatch(state, &call, |state| {
         body(state).map(|value| (value, Completion::default()))
     })
@@ -121,22 +115,17 @@ pub fn route_export<S, R>(
     mut store: StoreContextMut<'_, S>,
     interface: Option<&str>,
     function: &str,
-    args: &(dyn Debug + Send + Sync),
+    args: &Arguments,
     body: impl FnOnce(StoreContextMut<'_, S>) -> wasmtime::Result<R>,
 ) -> wasmtime::Result<R>
 where
     S: MiddlewareView + 'static,
 {
     let chain = Arc::clone(store.data_mut().middleware().chain());
-    let call = Call {
-        id: chain.next_id(),
-        direction: Direction::Export,
-        interface,
-        version: None,
-        function,
-        handles: &[],
-        args,
-    };
+    let mut call = Call::new(chain.next_id(), Direction::Export, function).with_args(args);
+    if let Some(interface) = interface {
+        call = call.in_interface(interface, None);
+    }
     chain.dispatch_export(store, &call, body)
 }
 
@@ -170,7 +159,8 @@ macro_rules! route_imports {
                     &mut self,
                     $($argument: $argument_type),*
                 ) -> $return {
-                    let arguments = ($($argument.clone()),*);
+                    let arguments = $crate::Arguments::new()
+                        $(.with_debug(stringify!($argument), &$argument))*;
                     let function = stringify!($method).replace('_', "-");
                     self.dispatch($interface, &function, &arguments, |state| {
                         <$state as $host>::$method(state $(, $argument)*)
@@ -183,13 +173,11 @@ macro_rules! route_imports {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use wasmtime::{AsContextMut, Engine, Store};
 
     use crate::{
-        Chain, InvocationContext, MiddlewareCtx, MiddlewareView, Routing, dispatch_import,
-        route_export,
+        Arguments, Chain, InvocationContext, MiddlewareCtx, MiddlewareView, Routing,
+        dispatch_import, route_export,
     };
 
     struct State {
@@ -201,7 +189,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 middleware: Some(MiddlewareCtx::new(
-                    Arc::new(Chain::builder().build()),
+                    Chain::builder().build(),
                     InvocationContext::new("test"),
                 )),
                 calls: 0,
@@ -235,7 +223,7 @@ mod tests {
     #[test]
     fn routes_generated_and_plain_import_shapes() {
         let mut state = State::new();
-        let first = dispatch_import(&mut state, None, "plain", &(), |state| {
+        let first = dispatch_import(&mut state, None, "plain", &Arguments::new(), |state| {
             state.calls += 1;
             Ok(state.calls)
         })
@@ -251,7 +239,8 @@ mod tests {
         let engine = Engine::default();
         let mut store = Store::new(&engine, State::new());
 
-        let value = route_export(store.as_context_mut(), None, "greet", &"Hello", |_store| {
+        let args = Arguments::new().with("greeting", "Hello");
+        let value = route_export(store.as_context_mut(), None, "greet", &args, |_store| {
             Ok("Hello, Ada!")
         })
         .unwrap();

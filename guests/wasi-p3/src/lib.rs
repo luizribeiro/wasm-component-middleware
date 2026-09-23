@@ -176,6 +176,61 @@ impl Guest for Component {
         )
     }
 
+    async fn stream_write(path: String, size: u64) -> String {
+        use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+        let (root, _) = wasi::filesystem::preopens::get_directories().remove(0);
+        let file = root
+            .open_at(
+                PathFlags::empty(),
+                path,
+                OpenFlags::CREATE | OpenFlags::TRUNCATE,
+                DescriptorFlags::WRITE,
+            )
+            .await
+            .unwrap();
+        let split = size.saturating_sub(size / 4);
+        let initial = generated_bytes(split);
+        let appended = generated_bytes(size - split);
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let completion = file.write_via_stream(reader, 0);
+        assert!(writer.write_all(initial).await.is_empty());
+        drop(writer);
+        let first = completion.await;
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let completion = file.append_via_stream(reader);
+        assert!(writer.write_all(appended).await.is_empty());
+        drop(writer);
+        let second = completion.await;
+        format!("write={first:?}, append={second:?}")
+    }
+
+    async fn stream_write_tolerant(path: String, size: u64) -> String {
+        use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+        let (root, _) = wasi::filesystem::preopens::get_directories().remove(0);
+        let file = root
+            .open_at(
+                PathFlags::empty(),
+                path,
+                OpenFlags::CREATE | OpenFlags::TRUNCATE,
+                DescriptorFlags::WRITE,
+            )
+            .await
+            .unwrap();
+        let bytes = generated_bytes(size);
+        let offered = bytes.len();
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let completion = file.write_via_stream(reader, 0);
+        let leftover = writer.write_all(bytes).await.len();
+        drop(writer);
+        let completion = completion.await;
+        format!(
+            "offered={offered}, acknowledged={}, leftover={leftover}, completion={completion:?}",
+            offered - leftover
+        )
+    }
+
     async fn cancel_stream_read(path: String) {
         use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
@@ -200,9 +255,41 @@ impl Guest for Component {
         drop(stream);
         drop(completion);
     }
+
+    async fn cancel_stream_write(path: String) {
+        use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+        let (root, _) = wasi::filesystem::preopens::get_directories().remove(0);
+        let file = root
+            .open_at(
+                PathFlags::empty(),
+                path,
+                OpenFlags::CREATE | OpenFlags::TRUNCATE,
+                DescriptorFlags::WRITE,
+            )
+            .await
+            .unwrap();
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let completion = file.write_via_stream(reader, 0);
+        let mut write = Box::pin(writer.write_all(generated_bytes(8 * 1024 * 1024)));
+        poll_fn(|context| {
+            assert!(write.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(write);
+        drop(writer);
+        drop(completion);
+    }
 }
 
 export!(Component);
+
+fn generated_bytes(size: u64) -> Vec<u8> {
+    (0..size)
+        .map(|index| ((index.wrapping_mul(31) + index / 7) & 0xff) as u8)
+        .collect()
+}
 
 fn checksum(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |checksum, byte| {

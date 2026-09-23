@@ -30,6 +30,75 @@ macro_rules! filesystem_async {
     };
 }
 
+fn relay_write<T, M>(
+    mut store: Access<'_, T, GateData<T, M>>,
+    fd: Resource<Descriptor>,
+    data: StreamReader<u8>,
+    offset: Option<u64>,
+) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>>
+where
+    T: WasiView + MiddlewareView + 'static,
+    M: RelayMode,
+{
+    let Some(capacity) = M::CAPACITY else {
+        return if let Some(offset) = offset {
+            gate!(access store, "wasi:filesystem/types", "[method]descriptor.write-via-stream", handles = [fd.rep()], args = [offset = offset], delegate = |store| types::HostDescriptorWithStore::write_via_stream(delegate_access(store), fd, data, offset))
+        } else {
+            gate!(access store, "wasi:filesystem/types", "[method]descriptor.append-via-stream", handles = [fd.rep()], args = (), delegate = |store| types::HostDescriptorWithStore::append_via_stream(delegate_access(store), fd, data))
+        };
+    };
+    let descriptor = fd.rep();
+    let (opening_function, chunk_function, arguments) = offset.map_or_else(
+        || {
+            (
+                "[method]descriptor.append-via-stream",
+                "[stream-write]append-via-stream",
+                wasm_component_middleware::Arguments::new(),
+            )
+        },
+        |offset| {
+            (
+                "[method]descriptor.write-via-stream",
+                "[stream-write]write-via-stream",
+                wasm_component_middleware::Arguments::new().with("offset", offset),
+            )
+        },
+    );
+    let chain = std::sync::Arc::clone(store.data_mut().middleware().chain());
+    let handles = [descriptor];
+    let call = wasm_component_middleware::Call::new(
+        chain.next_id(),
+        wasm_component_middleware::Direction::Import,
+        opening_function,
+    )
+    .in_interface("wasi:filesystem/types", Some(WASI_VERSION))
+    .with_handles(&handles)
+    .with_args(&arguments);
+    chain.dispatch_access(store, &call, |store| {
+        let origin = Origin {
+            call_id: call.id,
+            interface: "wasi:filesystem/types",
+            version: WASI_VERSION,
+            function: chunk_function,
+            handles: std::sync::Arc::from([descriptor]),
+        };
+        let (data, shared) =
+            relay_bytes(store, data, origin, capacity, Err(types::ErrorCode::Access))?;
+        let completion = if let Some(offset) = offset {
+            types::HostDescriptorWithStore::write_via_stream(
+                delegate_access(store),
+                fd,
+                data,
+                offset,
+            )?
+        } else {
+            types::HostDescriptorWithStore::append_via_stream(delegate_access(store), fd, data)?
+        };
+        let completion = relay_completion(store, completion, shared)?;
+        Ok((completion, wasm_component_middleware::Completion::default()))
+    })
+}
+
 impl<T> types::Host for Gate<'_, T>
 where
     T: WasiView + MiddlewareView + 'static,
@@ -102,20 +171,20 @@ where
     }
 
     fn write_via_stream(
-        mut store: Access<'_, T, Self>,
+        store: Access<'_, T, Self>,
         fd: Resource<Descriptor>,
         data: StreamReader<u8>,
         offset: u64,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
-        gate!(access store, "wasi:filesystem/types", "[method]descriptor.write-via-stream", handles = [fd.rep()], args = [offset = offset], delegate = |store| types::HostDescriptorWithStore::write_via_stream(delegate_access(store), fd, data, offset))
+        relay_write(store, fd, data, Some(offset))
     }
 
     fn append_via_stream(
-        mut store: Access<'_, T, Self>,
+        store: Access<'_, T, Self>,
         fd: Resource<Descriptor>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
-        gate!(access store, "wasi:filesystem/types", "[method]descriptor.append-via-stream", handles = [fd.rep()], args = (), delegate = |store| types::HostDescriptorWithStore::append_via_stream(delegate_access(store), fd, data))
+        relay_write(store, fd, data, None)
     }
 
     async fn advise(

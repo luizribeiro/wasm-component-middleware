@@ -447,11 +447,46 @@ impl P3Harness {
         Ok(result)
     }
 
+    async fn stream_write(&mut self, path: &str, size: u64) -> wasmtime::Result<String> {
+        let result = self
+            .store
+            .run_concurrent(async |accessor| {
+                self.guest
+                    .call_stream_write(accessor, path.to_owned(), size)
+                    .await
+            })
+            .await??;
+        Ok(result)
+    }
+
+    async fn stream_write_tolerant(&mut self, path: &str, size: u64) -> wasmtime::Result<String> {
+        let result = self
+            .store
+            .run_concurrent(async |accessor| {
+                self.guest
+                    .call_stream_write_tolerant(accessor, path.to_owned(), size)
+                    .await
+            })
+            .await??;
+        Ok(result)
+    }
+
     async fn cancel_stream_read(&mut self, path: &str) -> wasmtime::Result<()> {
         self.store
             .run_concurrent(async |accessor| {
                 self.guest
                     .call_cancel_stream_read(accessor, path.to_owned())
+                    .await
+            })
+            .await??;
+        Ok(())
+    }
+
+    async fn cancel_stream_write(&mut self, path: &str) -> wasmtime::Result<()> {
+        self.store
+            .run_concurrent(async |accessor| {
+                self.guest
+                    .call_cancel_stream_write(accessor, path.to_owned())
                     .await
             })
             .await??;
@@ -1186,6 +1221,142 @@ async fn midstream_denial_returns_access_through_the_completion_future() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn relayed_writes_and_appends_preserve_bytes_and_origin() {
+    let size = 1024 * 1024 + 91;
+    let mut direct = P3Harness::new(true, Chain::builder().build())
+        .await
+        .unwrap();
+    let direct_result = direct.stream_write("written.bin", size).await.unwrap();
+    let direct_bytes = fs::read(direct.directory.path().join("written.bin")).unwrap();
+
+    let trace = Arc::new(Mutex::new(StreamTrace::default()));
+    let mut harness = P3Harness::new_relayed(
+        Chain::builder()
+            .layer(RecordStreams(Arc::clone(&trace)))
+            .build(),
+    )
+    .await
+    .unwrap();
+    let result = harness.stream_write("written.bin", size).await.unwrap();
+
+    assert_eq!(direct_result, "write=Ok(()), append=Ok(())");
+    assert_eq!(result, direct_result);
+    let bytes = fs::read(harness.directory.path().join("written.bin")).unwrap();
+    assert_eq!(bytes, direct_bytes);
+    assert_eq!(bytes.len(), usize::try_from(size).unwrap());
+    let split = size - size / 4;
+    let mut expected = stream_data(usize::try_from(split).unwrap());
+    expected.extend(stream_data(usize::try_from(size - split).unwrap()));
+    assert_eq!(bytes, expected);
+    let trace = trace.lock().unwrap();
+    assert_eq!(
+        trace.chunks.iter().map(|chunk| chunk.bytes).sum::<usize>(),
+        bytes.len()
+    );
+    assert_chunks_match_opening(
+        &trace,
+        "[stream-write]write-via-stream",
+        "[method]descriptor.write-via-stream",
+    );
+    assert_chunks_match_opening(
+        &trace,
+        "[stream-write]append-via-stream",
+        "[method]descriptor.append-via-stream",
+    );
+}
+
+fn reported_count(result: &str, name: &str) -> usize {
+    result
+        .split(", ")
+        .find_map(|field| field.strip_prefix(&format!("{name}=")))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn midstream_write_denial_drains_every_acknowledged_byte() {
+    const SIZE: usize = 4 * 1024 * 1024;
+
+    let chain = Chain::builder()
+        .layer(Budget::new(100 * 1024, |call: &Call<'_>| {
+            (call.function == "[stream-write]write-via-stream")
+                .then(|| {
+                    call.args
+                        .get("bytes")
+                        .and_then(ArgumentValue::byte_len)
+                        .map(|bytes| ((), u64::try_from(bytes).unwrap()))
+                })
+                .flatten()
+        }))
+        .build();
+    let mut harness = P3Harness::new_relayed(chain).await.unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        harness.stream_write_tolerant("denied-write.bin", u64::try_from(SIZE).unwrap()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert!(
+        result.contains("completion=Err(ErrorCode::Access)"),
+        "{result}"
+    );
+    let offered = reported_count(&result, "offered");
+    let acknowledged = reported_count(&result, "acknowledged");
+    let leftover = reported_count(&result, "leftover");
+    assert_eq!(offered, SIZE);
+    assert_eq!(acknowledged + leftover, offered);
+    let written = fs::read(harness.directory.path().join("denied-write.bin")).unwrap();
+    assert_eq!(written.len(), acknowledged, "{result}");
+    assert_eq!(written, stream_data(acknowledged));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn write_side_queue_stays_at_its_bound_while_the_file_consumer_drains() {
+    const SIZE: usize = 8 * 1024 * 1024;
+
+    let trace = Arc::new(Mutex::new(StreamTrace::default()));
+    let mut harness = P3Harness::new_relayed(
+        Chain::builder()
+            .layer(RecordStreams(Arc::clone(&trace)))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let result = harness
+        .stream_write_tolerant("bounded-write.bin", u64::try_from(SIZE).unwrap())
+        .await
+        .unwrap();
+
+    assert!(result.contains("completion=Ok(())"), "{result}");
+    assert_eq!(reported_count(&result, "acknowledged"), SIZE);
+    let trace = trace.lock().unwrap();
+    let write_chunks = trace
+        .chunks
+        .iter()
+        .filter(|chunk| chunk.function == "[stream-write]write-via-stream")
+        .collect::<Vec<_>>();
+    assert!(
+        write_chunks
+            .iter()
+            .all(|chunk| chunk.retained == chunk.bytes)
+    );
+    let high_water = write_chunks
+        .into_iter()
+        .map(|chunk| chunk.buffered)
+        .max()
+        .unwrap();
+    assert_eq!(
+        high_water,
+        wasm_component_middleware_wasi::p3::DEFAULT_STREAM_BUFFER_CAPACITY
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cancelling_a_relayed_read_does_not_hang() {
     let mut harness = P3Harness::new_relayed(Chain::builder().build())
         .await
@@ -1199,6 +1370,21 @@ async fn cancelling_a_relayed_read_does_not_hang() {
     tokio::time::timeout(
         Duration::from_secs(10),
         harness.cancel_stream_read("cancel.bin"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_a_relayed_write_does_not_hang() {
+    let mut harness = P3Harness::new_relayed(Chain::builder().build())
+        .await
+        .unwrap();
+
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        harness.cancel_stream_write("cancel-write.bin"),
     )
     .await
     .unwrap()

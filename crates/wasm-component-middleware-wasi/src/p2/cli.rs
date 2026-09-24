@@ -141,3 +141,12 @@ where
     terminal_stdout::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     terminal_stderr::add_to_linker::<T, GateData<T>>(linker, project::<T>)
 }
+
+pub(super) fn add_proxy_interfaces_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    stdin::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
+    stdout::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
+    stderr::add_to_linker::<T, GateData<T>>(linker, project::<T>)
+}

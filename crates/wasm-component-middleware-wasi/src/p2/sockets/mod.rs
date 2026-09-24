@@ -1,3 +1,6 @@
+mod async_ip_name_lookup;
+mod async_tcp;
+mod async_udp;
 mod ip_name_lookup;
 mod network;
 mod tcp;
@@ -5,6 +8,7 @@ mod udp;
 
 use wasm_component_middleware::ArgumentValue;
 use wasmtime_wasi::p2::bindings::sockets::network::IpSocketAddress;
+use wasmtime_wasi::p2::bindings::sockets::udp::OutgoingDatagram as AsyncOutgoingDatagram;
 use wasmtime_wasi::p2::bindings::sync::sockets::udp::OutgoingDatagram;
 
 pub(super) use network::add_to_linker as add_link_options_interfaces_to_linker;
@@ -16,6 +20,17 @@ where
     tcp::add_to_linker(linker)?;
     udp::add_to_linker(linker)?;
     ip_name_lookup::add_to_linker(linker)
+}
+
+pub(super) fn add_to_linker_async<T>(
+    linker: &mut wasmtime::component::Linker<T>,
+) -> wasmtime::Result<()>
+where
+    T: wasmtime_wasi::WasiView + wasm_component_middleware::MiddlewareView + 'static,
+{
+    async_tcp::add_to_linker(linker)?;
+    async_udp::add_to_linker(linker)?;
+    async_ip_name_lookup::add_to_linker(linker)
 }
 
 fn address(address: IpSocketAddress) -> String {
@@ -36,6 +51,20 @@ fn optional_address(value: Option<IpSocketAddress>) -> ArgumentValue {
 }
 
 fn datagrams(datagrams: &[OutgoingDatagram]) -> ArgumentValue {
+    ArgumentValue::List(
+        datagrams
+            .iter()
+            .map(|datagram| {
+                ArgumentValue::List(vec![
+                    ArgumentValue::bytes(&datagram.data),
+                    optional_address(datagram.remote_address),
+                ])
+            })
+            .collect(),
+    )
+}
+
+fn async_datagrams(datagrams: &[AsyncOutgoingDatagram]) -> ArgumentValue {
     ArgumentValue::List(
         datagrams
             .iter()

@@ -1,3 +1,5 @@
+mod async_filesystem;
+mod async_io;
 mod cli;
 mod clocks;
 mod filesystem;
@@ -47,6 +49,83 @@ pub const ROUTED_INTERFACES: &[RoutedInterface] = &[
     RoutedInterface::from_static("wasi:sockets/udp-create-socket"),
 ];
 
+/// Adds asynchronous WASI Preview 2 interfaces with middleware gates.
+///
+/// Use this in an async Wasmtime engine, including alongside Preview 3 because
+/// Rust's standard library still imports Preview 2 interfaces.
+///
+/// # Errors
+///
+/// Returns an error if Wasmtime cannot register an interface.
+pub fn add_to_linker_async<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    add_to_linker_with_options_async(linker, &wasmtime_wasi::p2::bindings::LinkOptions::default())
+}
+
+/// Adds asynchronous WASI Preview 2 interfaces with middleware gates and options.
+///
+/// Use this when enabling unstable WASI functions through Wasmtime's
+/// [`wasmtime_wasi::p2::bindings::LinkOptions`].
+///
+/// # Errors
+///
+/// Returns an error if Wasmtime cannot register an interface.
+pub fn add_to_linker_with_options_async<T>(
+    linker: &mut Linker<T>,
+    options: &wasmtime_wasi::p2::bindings::LinkOptions,
+) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    sockets::add_link_options_interfaces_to_linker::<T, _>(linker, options)?;
+    cli::add_to_linker::<T>(linker)?;
+    clocks::add_to_linker::<T>(linker)?;
+    filesystem::add_preopens_to_linker::<T>(linker)?;
+    async_filesystem::add_to_linker::<T>(linker)?;
+    async_io::add_to_linker::<T>(linker)?;
+    random::add_to_linker::<T>(linker)?;
+    sockets::add_to_linker_async::<T>(linker)
+}
+
+/// Adds the asynchronous Preview 2 interfaces used by `wasi:http/proxy`.
+///
+/// This is the middleware-routed counterpart of
+/// [`wasmtime_wasi::p2::add_to_linker_proxy_interfaces_async`].
+///
+/// # Errors
+///
+/// Returns an error if Wasmtime cannot register an interface.
+pub fn add_to_linker_proxy_interfaces_async<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    async_io::add_to_linker::<T>(linker)?;
+    clocks::add_to_linker::<T>(linker)?;
+    random::add_proxy_interfaces_to_linker::<T>(linker)?;
+    cli::add_proxy_interfaces_to_linker::<T>(linker)
+}
+
+/// Adds the synchronous Preview 2 interfaces used by `wasi:http/proxy`.
+///
+/// This is the middleware-routed counterpart of
+/// [`wasmtime_wasi::p2::add_to_linker_proxy_interfaces_sync`].
+///
+/// # Errors
+///
+/// Returns an error if Wasmtime cannot register an interface.
+#[doc(hidden)]
+pub fn add_to_linker_proxy_interfaces_sync<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    io::add_to_linker::<T>(linker)?;
+    clocks::add_to_linker::<T>(linker)?;
+    random::add_proxy_interfaces_to_linker::<T>(linker)?;
+    cli::add_proxy_interfaces_to_linker::<T>(linker)
+}
+
 /// Adds synchronous WASI Preview 2 interfaces with middleware gates.
 ///
 /// This mirrors [`wasmtime_wasi::p2::add_to_linker_sync`], routing every
@@ -81,7 +160,7 @@ pub fn add_to_linker_with_options_sync<T>(
 where
     T: WasiView + MiddlewareView + 'static,
 {
-    sockets::add_link_options_interfaces_to_linker::<T>(linker, options)?;
+    sockets::add_link_options_interfaces_to_linker::<T, _>(linker, options)?;
     cli::add_to_linker::<T>(linker)?;
     clocks::add_to_linker::<T>(linker)?;
     filesystem::add_to_linker::<T>(linker)?;

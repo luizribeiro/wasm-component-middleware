@@ -95,7 +95,7 @@ async fn main() -> wasmtime::Result<()> {
     let engine = Engine::new(&config)?;
     let component = Component::from_file(&engine, test_guests::wasi_p3())?;
     let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
     wasm_component_middleware_wasi::p3::add_to_linker_with_stream_relay(
         &mut linker,
         wasm_component_middleware_wasi::p3::StreamRelay::default(),

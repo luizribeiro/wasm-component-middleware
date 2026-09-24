@@ -277,7 +277,7 @@ async fn run_p3(servers: Servers) -> wasmtime::Result<String> {
     let engine = Engine::new(&config)?;
     let component = Component::from_file(&engine, test_guests::wasi_p3())?;
     let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
     wasm_component_middleware_wasi::p3::add_to_linker(&mut linker)?;
     let chain = Chain::builder()
         .layer(Logger::stderr())

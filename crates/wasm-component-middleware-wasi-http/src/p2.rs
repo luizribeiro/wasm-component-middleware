@@ -561,14 +561,7 @@ where
     add_http_sync(linker)
 }
 
-/// Adds upstream asynchronous Preview 2 proxy interfaces and gated HTTP interfaces.
-///
-/// The proxy interfaces are registered directly through Wasmtime and are not
-/// gated: `wasi:io/error`, `wasi:io/poll`, `wasi:io/streams`,
-/// `wasi:clocks/wall-clock`, `wasi:clocks/monotonic-clock`,
-/// `wasi:random/random`, `wasi:cli/stdin`, `wasi:cli/stdout`, and
-/// `wasi:cli/stderr`. Use [`add_only_http_to_linker_async`] with separately
-/// linked WASI interfaces when middleware must observe those calls.
+/// Adds asynchronous Preview 2 proxy and HTTP interfaces with middleware gates.
 ///
 /// # Errors
 ///
@@ -577,7 +570,7 @@ pub fn add_to_linker_async<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     T: WasiHttpView + WasiView + MiddlewareView + 'static,
 {
-    wasmtime_wasi::p2::add_to_linker_proxy_interfaces_async(linker)?;
+    wasm_component_middleware_wasi::p2::add_to_linker_proxy_interfaces_async(linker)?;
     add_http_async(linker)
 }
 

@@ -50,3 +50,10 @@ where
     insecure::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     insecure_seed::add_to_linker::<T, GateData<T>>(linker, project::<T>)
 }
+
+pub(super) fn add_proxy_interfaces_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    random::add_to_linker::<T, GateData<T>>(linker, project::<T>)
+}

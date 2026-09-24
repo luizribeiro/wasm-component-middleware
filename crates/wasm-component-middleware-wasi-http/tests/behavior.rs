@@ -179,7 +179,7 @@ async fn fetch_p2(authority: &str, gated: bool) -> (String, Vec<CallRecord>) {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let chain = Chain::builder().layer(Record(Arc::clone(&calls))).build();
     let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker).unwrap();
     if gated {
         wasm_component_middleware_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
             .unwrap();
@@ -205,7 +205,7 @@ async fn fetch_p3(authority: &str, gated: bool) -> (String, Vec<CallRecord>) {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let chain = Chain::builder().layer(Record(Arc::clone(&calls))).build();
     let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker).unwrap();
     if gated {
         wasm_component_middleware_wasi_http::p3::add_to_linker(&mut linker).unwrap();
     } else {
@@ -309,6 +309,7 @@ fn assert_wit_dispatch_coverage(
 ) {
     let observed = records
         .iter()
+        .filter(|record| record.interface.starts_with("wasi:http/"))
         .map(|record| (record.interface.clone(), record.function.clone()))
         .collect::<BTreeSet<_>>();
     let mut expected = expected_calls(wit);
@@ -528,7 +529,7 @@ async fn http_hook_denies_before_an_allowed_socket_connection() {
     let component = Component::from_file(&engine, test_guests::http_p2()).unwrap();
     let chain = Chain::builder().build();
     let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker).unwrap();
     wasm_component_middleware_wasi_http::p2::add_only_http_to_linker_async(&mut linker).unwrap();
     let mut store = Store::new(&engine, state(chain, hooks));
     let guest = p2::Client::instantiate_async(&mut store, &component, &linker)
@@ -560,7 +561,7 @@ async fn allowed_http_bypasses_a_restrictive_socket_policy() {
     let component = Component::from_file(&engine, test_guests::http_p2()).unwrap();
     let chain = Chain::builder().build();
     let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker).unwrap();
     wasm_component_middleware_wasi_http::p2::add_only_http_to_linker_async(&mut linker).unwrap();
     let socket_check = Arc::new(AtomicBool::new(false));
     let state = state_with_socket_policy(chain, hooks, Arc::clone(&socket_check), false);

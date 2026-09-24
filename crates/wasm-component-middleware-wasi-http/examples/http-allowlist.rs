@@ -135,7 +135,7 @@ async fn main() -> wasmtime::Result<()> {
     let engine = Engine::new(&config)?;
     let component = Component::from_file(&engine, test_guests::http_p2())?;
     let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
     wasm_component_middleware_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
     let chain = Chain::builder().layer(authority_policy).build();
     let mut store = Store::new(

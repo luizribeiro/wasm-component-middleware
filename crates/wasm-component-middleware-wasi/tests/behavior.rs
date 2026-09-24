@@ -42,6 +42,15 @@ mod p3 {
     });
 }
 
+mod p2_async {
+    wasmtime::component::bindgen!({
+        path: "../../guests/wasi-p2/wit",
+        world: "workload",
+        exports: { default: async },
+        require_store_data_send: true,
+    });
+}
+
 struct State {
     middleware: Option<MiddlewareCtx<Self>>,
     table: ResourceTable,
@@ -294,6 +303,23 @@ struct P3Harness {
     directory: tempfile::TempDir,
 }
 
+struct AsyncP2Harness {
+    store: Store<State>,
+    guest: p2_async::Workload,
+    stdout: MemoryOutputPipe,
+    stderr: MemoryOutputPipe,
+    io: IoTrace,
+    _directory: tempfile::TempDir,
+}
+
+struct P2Fixture {
+    state: State,
+    stdout: MemoryOutputPipe,
+    stderr: MemoryOutputPipe,
+    io: IoTrace,
+    directory: tempfile::TempDir,
+}
+
 fn preopen_fixture(builder: &mut WasiCtxBuilder) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("note.txt"), b"alpha-file").unwrap();
@@ -541,6 +567,54 @@ impl P3Harness {
     }
 }
 
+fn p2_fixture(chain: Arc<Chain<State>>) -> P2Fixture {
+    let stdout = MemoryOutputPipe::new(4096);
+    let stderr = MemoryOutputPipe::new(4096);
+    let io = IoTrace::default();
+    let mut builder = WasiCtxBuilder::new();
+    builder
+        .env("GREETING", "Hello")
+        .args(&["program", "one"])
+        .stdin(TracedStdin {
+            pipe: MemoryInputPipe::new("guest input"),
+            trace: io.clone(),
+        })
+        .stdout(TracedStdout {
+            label: "stdout",
+            pipe: stdout.clone(),
+            trace: io.clone(),
+        })
+        .stderr(TracedStdout {
+            label: "stderr",
+            pipe: stderr.clone(),
+            trace: io.clone(),
+        })
+        .secure_random(Deterministic::new(vec![1, 2, 3, 4]))
+        .insecure_random(Deterministic::new(vec![9, 10, 11, 12]))
+        .insecure_random_seed(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff)
+        .wall_clock(FixedWallClock)
+        .monotonic_clock(FixedMonotonicClock)
+        .allow_tcp(true)
+        .allow_udp(true)
+        .allow_ip_name_lookup(true)
+        .socket_addr_check(|address, _| Box::pin(async move { address.ip().is_loopback() }));
+    let directory = preopen_fixture(&mut builder);
+    P2Fixture {
+        state: State {
+            middleware: Some(MiddlewareCtx::new(
+                chain,
+                InvocationContext::new("workload"),
+            )),
+            table: ResourceTable::new(),
+            wasi: builder.build(),
+        },
+        stdout,
+        stderr,
+        io,
+        directory,
+    }
+}
+
 impl Harness {
     fn new(gated: bool, chain: Arc<Chain<State>>) -> wasmtime::Result<Self> {
         let engine = Engine::default();
@@ -551,57 +625,16 @@ impl Harness {
         } else {
             wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
         }
-
-        let stdout = MemoryOutputPipe::new(4096);
-        let stderr = MemoryOutputPipe::new(4096);
-        let io = IoTrace::default();
-        let mut builder = WasiCtxBuilder::new();
-        builder
-            .env("GREETING", "Hello")
-            .args(&["program", "one"])
-            .stdin(TracedStdin {
-                pipe: MemoryInputPipe::new("guest input"),
-                trace: io.clone(),
-            })
-            .stdout(TracedStdout {
-                label: "stdout",
-                pipe: stdout.clone(),
-                trace: io.clone(),
-            })
-            .stderr(TracedStdout {
-                label: "stderr",
-                pipe: stderr.clone(),
-                trace: io.clone(),
-            })
-            .secure_random(Deterministic::new(vec![1, 2, 3, 4]))
-            .insecure_random(Deterministic::new(vec![9, 10, 11, 12]))
-            .insecure_random_seed(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff)
-            .wall_clock(FixedWallClock)
-            .monotonic_clock(FixedMonotonicClock)
-            .allow_tcp(true)
-            .allow_udp(true)
-            .allow_ip_name_lookup(true)
-            .socket_addr_check(|address, _| Box::pin(async move { address.ip().is_loopback() }));
-        let directory = preopen_fixture(&mut builder);
-        let mut store = Store::new(
-            &engine,
-            State {
-                middleware: Some(MiddlewareCtx::new(
-                    chain,
-                    InvocationContext::new("workload"),
-                )),
-                table: ResourceTable::new(),
-                wasi: builder.build(),
-            },
-        );
+        let fixture = p2_fixture(chain);
+        let mut store = Store::new(&engine, fixture.state);
         let guest = Workload::instantiate(&mut store, &component, &linker)?;
         Ok(Self {
             store,
             guest,
-            stdout,
-            stderr,
-            io,
-            _directory: directory,
+            stdout: fixture.stdout,
+            stderr: fixture.stderr,
+            io: fixture.io,
+            _directory: fixture.directory,
         })
     }
 
@@ -615,6 +648,42 @@ impl Harness {
 
     fn quota_files(&mut self) -> wasmtime::Result<String> {
         self.guest.call_quota_files(&mut self.store)
+    }
+}
+
+impl AsyncP2Harness {
+    async fn new(gated: bool, chain: Arc<Chain<State>>) -> wasmtime::Result<Self> {
+        let mut config = Config::new();
+        config.wasm_component_model_async(true);
+        let engine = Engine::new(&config)?;
+        let component = Component::from_file(&engine, test_guests::wasi_p2())?;
+        let mut linker = Linker::new(&engine);
+        if gated {
+            wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
+        } else {
+            wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+        }
+        let fixture = p2_fixture(chain);
+        let mut store = Store::new(&engine, fixture.state);
+        let guest = p2_async::Workload::instantiate_async(&mut store, &component, &linker).await?;
+        Ok(Self {
+            store,
+            guest,
+            stdout: fixture.stdout,
+            stderr: fixture.stderr,
+            io: fixture.io,
+            _directory: fixture.directory,
+        })
+    }
+
+    async fn exercise(&mut self) -> wasmtime::Result<Observation> {
+        let returned = self.guest.call_exercise(&mut self.store).await?;
+        Ok(Observation {
+            returned,
+            stdout: self.stdout.contents().to_vec(),
+            stderr: self.stderr.contents().to_vec(),
+            io: self.io.events(),
+        })
     }
 }
 
@@ -1051,6 +1120,46 @@ fn gated_wasi_matches_plain_wasi() {
         "{}",
         plain.returned
     );
+}
+
+#[tokio::test]
+async fn async_preview_2_matches_plain_and_sync_wasi() {
+    let mut plain = AsyncP2Harness::new(false, Chain::builder().build())
+        .await
+        .unwrap();
+    let plain = plain.exercise().await.unwrap();
+    let mut gated = AsyncP2Harness::new(true, Chain::builder().build())
+        .await
+        .unwrap();
+    let gated = gated.exercise().await.unwrap();
+
+    assert_eq!(gated, plain);
+    let synchronous = tokio::task::spawn_blocking(|| run_exercise(true).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(gated, synchronous);
+
+    let calls = Arc::new(Mutex::new(BTreeSet::new()));
+    let mut recorded = AsyncP2Harness::new(
+        true,
+        Chain::builder().layer(Record(Arc::clone(&calls))).build(),
+    )
+    .await
+    .unwrap();
+    recorded.exercise().await.unwrap();
+    let calls = calls.lock().unwrap();
+    for expected in [
+        ("wasi:filesystem/types", "[method]descriptor.open-at"),
+        ("wasi:io/streams", "[method]input-stream.blocking-read"),
+        ("wasi:sockets/ip-name-lookup", "resolve-addresses"),
+        ("wasi:sockets/tcp", "[method]tcp-socket.start-connect"),
+        ("wasi:sockets/udp", "[method]udp-socket.stream"),
+    ] {
+        assert!(
+            calls.contains(&(expected.0.to_owned(), expected.1.to_owned())),
+            "missing {expected:?} from {calls:?}"
+        );
+    }
 }
 
 #[derive(Default)]

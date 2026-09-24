@@ -2,7 +2,6 @@ use wasm_component_middleware::MiddlewareView;
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::SocketError;
 use wasmtime_wasi::p2::bindings::sockets::{instance_network, network, tcp_create_socket};
-use wasmtime_wasi::p2::bindings::sync::LinkOptions;
 use wasmtime_wasi::sockets::WasiSocketsView as _;
 use wasmtime_wasi::{WasiView, p2::TcpSocket};
 
@@ -55,12 +54,13 @@ where
     }
 }
 
-pub(crate) fn add_to_linker<T>(
+pub(crate) fn add_to_linker<'a, T, O>(
     linker: &mut Linker<T>,
-    options: &LinkOptions,
+    options: &'a O,
 ) -> wasmtime::Result<()>
 where
     T: WasiView + MiddlewareView + 'static,
+    network::LinkOptions: From<&'a O>,
 {
     tcp_create_socket::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     instance_network::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;

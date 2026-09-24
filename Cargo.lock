@@ -1073,6 +1073,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
+name = "random"
+version = "0.0.0"
+dependencies = [
+ "guest-build",
+ "wasm-component-middleware",
+ "wasm-component-middleware-wasi",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "regalloc2"
 version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

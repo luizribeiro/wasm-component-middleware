@@ -1,0 +1,15 @@
+[workspace]
+
+[package]
+name = "random-guest"
+publish = false
+edition = "2024"
+rust-version = "1.96"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasi = "0.14.7"
+wit-bindgen = "0.62"

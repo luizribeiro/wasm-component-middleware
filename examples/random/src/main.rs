@@ -10,7 +10,7 @@ use wasmtime_wasi::random::Deterministic;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
-    path: "../../support/fixtures/wasi-p2/wit",
+    path: "guest/wit",
     world: "workload",
 });
 
@@ -62,7 +62,7 @@ impl Layer<State> for RandomCallLimit {
 
 fn main() -> wasmtime::Result<()> {
     let engine = Engine::default();
-    let component = Component::from_file(&engine, guest_build::wasi_p2())?;
+    let component = Component::from_file(&engine, guest_build::example("random"))?;
     let mut linker = Linker::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker)?;
 

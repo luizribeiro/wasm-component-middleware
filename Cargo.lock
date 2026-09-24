@@ -335,6 +335,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "deny"
+version = "0.0.0"
+dependencies = [
+ "guest-build",
+ "wasm-component-middleware",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

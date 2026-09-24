@@ -75,7 +75,7 @@
           cargo-nextest = cargoHook {
             name = "cargo-nextest-hook";
             runtimeInputs = [ pkgs.cargo-nextest ];
-            text = "cargo nextest run --workspace --all-features --locked --no-tests pass";
+            text = "cargo nextest run --release --workspace --all-features --locked --no-tests pass";
           };
           cargo-deny = cargoHook {
             name = "cargo-deny-hook";

@@ -356,7 +356,7 @@ impl P3Harness {
         let engine = Engine::new(&config)?;
         let component = Component::from_file(&engine, test_guests::wasi_p3())?;
         let mut linker = Linker::new(&engine);
-        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+        wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
         if relayed {
             wasm_component_middleware_wasi::p3::add_to_linker_with_stream_relay(
                 &mut linker,
@@ -1552,6 +1552,38 @@ async fn relayed_and_unrelayed_file_reads_match() {
         "[stream-read]read-via-stream",
         "[method]descriptor.read-via-stream",
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relayed_stdio_preserves_bytes_and_exposes_chunks() {
+    let mut direct = P3Harness::new(true, Chain::builder().build())
+        .await
+        .unwrap();
+    let direct_result = direct.exercise().await.unwrap();
+
+    let calls = Arc::new(Mutex::new(BTreeSet::new()));
+    let mut relayed =
+        P3Harness::new_relayed(Chain::builder().layer(Record(Arc::clone(&calls))).build())
+            .await
+            .unwrap();
+    let relayed_result = relayed.exercise().await.unwrap();
+
+    assert_eq!(relayed_result, direct_result);
+    assert_eq!(relayed.stdout.contents(), direct.stdout.contents());
+    assert_eq!(relayed.stderr.contents(), direct.stderr.contents());
+    let calls = calls.lock().unwrap();
+    assert!(calls.contains(&(
+        "wasi:cli/stdin".to_owned(),
+        "[stream-read]read-via-stream".to_owned(),
+    )));
+    assert!(calls.contains(&(
+        "wasi:cli/stdout".to_owned(),
+        "[stream-write]write-via-stream".to_owned(),
+    )));
+    assert!(calls.contains(&(
+        "wasi:cli/stderr".to_owned(),
+        "[stream-write]write-via-stream".to_owned(),
+    )));
 }
 
 #[tokio::test(flavor = "multi_thread")]

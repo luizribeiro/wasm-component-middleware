@@ -12,10 +12,12 @@ use wasmtime_wasi::p3::cli::{TerminalInput, TerminalOutput};
 use crate::gate::{Gate, GateData, gate, project};
 
 use super::WASI_VERSION;
+use super::relay::{Origin, RelayMode, Relayed, relay_bytes, relay_completion};
 
-fn delegate_access<'a, T>(store: &'a mut Access<'_, T, GateData<T>>) -> Access<'a, T, WasiCli>
+fn delegate_access<'a, T, M>(store: &'a mut Access<'_, T, GateData<T, M>>) -> Access<'a, T, WasiCli>
 where
     T: WasiView + MiddlewareView + 'static,
+    M: 'static,
 {
     Access::new(store.as_context_mut(), |state: &mut T| state.cli())
 }
@@ -54,43 +56,115 @@ where
 
 impl<T> stdin::Host for Gate<'_, T> where T: WasiView + MiddlewareView + 'static {}
 
-impl<T> stdin::HostWithStore<T> for GateData<T>
+impl<T, M> stdin::HostWithStore<T> for GateData<T, M>
 where
     T: WasiView + MiddlewareView + 'static,
+    M: RelayMode,
 {
     fn read_via_stream(
         mut store: Access<T, Self>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
-        gate!(access store, "wasi:cli/stdin", "read-via-stream", handles = [], args = (), delegate = |store| stdin::HostWithStore::read_via_stream(delegate_access(store)))
+        let Some(capacity) = M::CAPACITY else {
+            return gate!(access store, "wasi:cli/stdin", "read-via-stream", handles = [], args = (), delegate = |store| stdin::HostWithStore::read_via_stream(delegate_access(store)));
+        };
+        let chain = std::sync::Arc::clone(store.data_mut().middleware().chain());
+        let call = wasm_component_middleware::Call::new(
+            chain.next_id(),
+            wasm_component_middleware::Direction::Import,
+            "read-via-stream",
+        )
+        .in_interface("wasi:cli/stdin", Some(WASI_VERSION));
+        chain.dispatch_access(store, &call, |store| {
+            let (input, completion) =
+                stdin::HostWithStore::read_via_stream(delegate_access(store))?;
+            let origin = Origin {
+                call_id: call.id,
+                interface: "wasi:cli/stdin",
+                version: WASI_VERSION,
+                function: "[stream-read]read-via-stream",
+                handles: std::sync::Arc::from([]),
+            };
+            let (output, shared) =
+                relay_bytes(store, input, origin, capacity, Err(types::ErrorCode::Io))?;
+            let completion = relay_completion(store, completion, shared)?;
+            Ok((
+                (output, completion),
+                wasm_component_middleware::Completion::default(),
+            ))
+        })
     }
 }
 
 impl<T> stdout::Host for Gate<'_, T> where T: WasiView + MiddlewareView + 'static {}
 
-impl<T> stdout::HostWithStore<T> for GateData<T>
+impl<T, M> stdout::HostWithStore<T> for GateData<T, M>
 where
     T: WasiView + MiddlewareView + 'static,
+    M: RelayMode,
 {
     fn write_via_stream(
-        mut store: Access<'_, T, Self>,
+        store: Access<'_, T, Self>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
-        gate!(access store, "wasi:cli/stdout", "write-via-stream", handles = [], args = (), delegate = |store| stdout::HostWithStore::write_via_stream(delegate_access(store), data))
+        relay_output::<T, M>(store, data, "wasi:cli/stdout", |store, data| {
+            stdout::HostWithStore::write_via_stream(delegate_access(store), data)
+        })
     }
 }
 
 impl<T> stderr::Host for Gate<'_, T> where T: WasiView + MiddlewareView + 'static {}
 
-impl<T> stderr::HostWithStore<T> for GateData<T>
+impl<T, M> stderr::HostWithStore<T> for GateData<T, M>
 where
     T: WasiView + MiddlewareView + 'static,
+    M: RelayMode,
 {
     fn write_via_stream(
-        mut store: Access<'_, T, Self>,
+        store: Access<'_, T, Self>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
-        gate!(access store, "wasi:cli/stderr", "write-via-stream", handles = [], args = (), delegate = |store| stderr::HostWithStore::write_via_stream(delegate_access(store), data))
+        relay_output::<T, M>(store, data, "wasi:cli/stderr", |store, data| {
+            stderr::HostWithStore::write_via_stream(delegate_access(store), data)
+        })
     }
+}
+
+fn relay_output<T, M>(
+    mut store: Access<'_, T, GateData<T, M>>,
+    data: StreamReader<u8>,
+    interface: &'static str,
+    delegate: impl FnOnce(
+        &mut Access<'_, T, GateData<T, M>>,
+        StreamReader<u8>,
+    ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>>,
+) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>>
+where
+    T: WasiView + MiddlewareView + 'static,
+    M: RelayMode,
+{
+    let Some(capacity) = M::CAPACITY else {
+        return gate!(access store, interface, "write-via-stream", handles = [], args = (), delegate = |store| delegate(store, data));
+    };
+    let chain = std::sync::Arc::clone(store.data_mut().middleware().chain());
+    let call = wasm_component_middleware::Call::new(
+        chain.next_id(),
+        wasm_component_middleware::Direction::Import,
+        "write-via-stream",
+    )
+    .in_interface(interface, Some(WASI_VERSION));
+    chain.dispatch_access(store, &call, |store| {
+        let origin = Origin {
+            call_id: call.id,
+            interface,
+            version: WASI_VERSION,
+            function: "[stream-write]write-via-stream",
+            handles: std::sync::Arc::from([]),
+        };
+        let (data, shared) = relay_bytes(store, data, origin, capacity, Err(types::ErrorCode::Io))?;
+        let completion = delegate(store, data)?;
+        let completion = relay_completion(store, completion, shared)?;
+        Ok((completion, wasm_component_middleware::Completion::default()))
+    })
 }
 
 impl<T> terminal_input::Host for Gate<'_, T> where T: WasiView + MiddlewareView + 'static {}
@@ -157,4 +231,23 @@ where
     terminal_stdin::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     terminal_stdout::add_to_linker::<T, GateData<T>>(linker, project::<T>)?;
     terminal_stderr::add_to_linker::<T, GateData<T>>(linker, project::<T>)
+}
+
+pub(super) fn add_to_linker_relayed<T, const CAPACITY: usize>(
+    linker: &mut Linker<T>,
+) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
+    types::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    environment::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    exit::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    stdin::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    stdout::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    stderr::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    terminal_input::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    terminal_output::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    terminal_stdin::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    terminal_stdout::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)?;
+    terminal_stderr::add_to_linker::<T, GateData<T, Relayed<CAPACITY>>>(linker, project::<T>)
 }

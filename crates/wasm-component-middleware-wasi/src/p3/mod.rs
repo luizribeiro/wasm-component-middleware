@@ -112,10 +112,10 @@ where
     clocks::add_to_linker(linker)
 }
 
-/// Adds Preview 3 interfaces and relays filesystem byte streams through middleware.
+/// Adds Preview 3 interfaces and relays filesystem, socket, and stdio byte streams.
 ///
-/// Each transferred chunk appears as a synthetic filesystem call carrying the
-/// opening call's identifier and descriptor handle. Use [`add_to_linker`] when
+/// Each transferred chunk appears as a synthetic call carrying the opening
+/// call's identifier and any resource handles. Use [`add_to_linker`] when
 /// byte-level policy is unnecessary and the direct Wasmtime path is preferred.
 /// Wasmtime produces accepted Preview 3 TCP sockets inside the stream returned
 /// by `tcp-socket.listen`, so layers see the `listen` call but not each accepted
@@ -134,7 +134,7 @@ where
     filesystem::add_to_linker_relayed::<T, CAPACITY>(linker)?;
     random::add_to_linker(linker)?;
     sockets::add_to_linker_relayed::<T, CAPACITY>(linker)?;
-    cli::add_to_linker(linker)?;
+    cli::add_to_linker_relayed::<T, CAPACITY>(linker)?;
     clocks::add_to_linker(linker)
 }
 

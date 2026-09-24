@@ -1579,6 +1579,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasi-p3"
+version = "0.0.0"
+dependencies = [
+ "guest-build",
+ "tokio",
+ "wasm-component-middleware",
+ "wasm-component-middleware-wasi",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "wasm-component-middleware"
 version = "0.0.0"
 dependencies = [

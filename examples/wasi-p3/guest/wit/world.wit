@@ -1,0 +1,9 @@
+package example:wasi-p3;
+
+world workload {
+  import wasi:cli/environment@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+
+  export basic-system: async func();
+}

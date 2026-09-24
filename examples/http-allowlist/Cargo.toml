@@ -1,0 +1,25 @@
+[package]
+name = "http-allowlist"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+bytes = "1"
+guest-build = { path = "../../support/guest-build" }
+http.workspace = true
+http-body-util = "0.1"
+hyper = { workspace = true, features = ["http1", "server"] }
+tokio = { workspace = true, features = ["net"] }
+wasm-component-middleware = { path = "../../crates/wasm-component-middleware" }
+wasm-component-middleware-wasi = { path = "../../crates/wasm-component-middleware-wasi" }
+wasm-component-middleware-wasi-http = { path = "../../crates/wasm-component-middleware-wasi-http" }
+wasmtime = { workspace = true, features = ["cranelift"] }
+wasmtime-wasi.workspace = true
+wasmtime-wasi-http.workspace = true
+
+[lints]
+workspace = true

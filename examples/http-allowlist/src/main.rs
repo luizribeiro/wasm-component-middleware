@@ -19,7 +19,7 @@ use wasmtime_wasi_http::io::TokioIo;
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
 wasmtime::component::bindgen!({
-    path: "../../support/fixtures/http-p2/wit",
+    path: "guest/wit",
     world: "client",
     exports: { default: async },
     require_store_data_send: true,
@@ -133,7 +133,7 @@ async fn main() -> wasmtime::Result<()> {
     let mut config = Config::new();
     config.wasm_component_model_async(true);
     let engine = Engine::new(&config)?;
-    let component = Component::from_file(&engine, guest_build::http_p2())?;
+    let component = Component::from_file(&engine, guest_build::example("http-allowlist"))?;
     let mut linker = Linker::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
     wasm_component_middleware_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;

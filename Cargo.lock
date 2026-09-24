@@ -642,6 +642,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-allowlist"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "guest-build",
+ "http",
+ "http-body-util",
+ "hyper",
+ "tokio",
+ "wasm-component-middleware",
+ "wasm-component-middleware-wasi",
+ "wasm-component-middleware-wasi-http",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+]
+
+[[package]]
 name = "http-body"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

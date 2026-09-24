@@ -4,8 +4,12 @@
 layers around WebAssembly component calls. A single chain can observe or deny
 the host's imports and the component's exports while preserving their nesting.
 
-The [`trace` example](crates/wasm-component-middleware/examples/trace.rs) builds
-a chain with the included logger:
+The [examples index](examples/README.md) is the quickest way to see each feature
+in a complete, runnable host.
+
+## Core middleware
+
+Build a chain and store it with the host state:
 
 ```rust
 let chain = Chain::builder().layer(Logger::stderr()).build();
@@ -24,12 +28,6 @@ Generated host imports are linked through `Routed<State>`. Their ordinary
 enable trappable imports so middleware can refuse a call:
 
 ```rust
-wasmtime::component::bindgen!({
-    path: "../../guests/hello/wit",
-    world: "hello",
-    imports: { default: trappable },
-});
-
 route_imports! {
     const HELLO_HOST: example::hello::host::Host => State as "example:hello/host" {
         fn user_name(&mut self) -> wasmtime::Result<String>;
@@ -41,16 +39,8 @@ example::hello::host::add_to_linker::<_, Routed<State>>(
     &mut linker,
     Routed::<State>::get,
 )?;
-verify_routing(
-    &engine,
-    &component,
-    [HELLO_HOST],
-    ["wasi:"],
-)?;
+verify_routing(&engine, &component, [HELLO_HOST], ["wasi:"])?;
 ```
-
-If middleware refuses an imported function whose WIT result has no error case,
-Wasmtime reports the refusal to the guest as a trap.
 
 Layers run outside-in before a call and inside-out afterward. They can share
 state across stores through `Arc`, or keep invocation-local state in
@@ -59,36 +49,25 @@ state across stores through `Arc`, or keep invocation-local state in
 policy that needs typed arguments, resource handles, returned handles,
 failures, or cancellation.
 
-Run it from the repository root:
-
-```console
-$ cargo run --example trace
-→ #1 export greet(greeting="Hello")
-  → #2 import example:hello/host.user-name()
-  ← #2 returned
-  → #3 import example:hello/host.log(message="greeting Ada")
-  ← #3 returned
-← #1 returned
-Hello, Ada!
-```
+See [trace](examples/trace/README.md) for nested call logging and
+[deny](examples/deny/README.md) for function allowlisting.
 
 ## WASI
 
 Switch synchronous WASI Preview 2 calls into the same chain by changing the
-import used to populate the linker:
+function used to populate the linker:
 
 ```rust
-// use wasmtime_wasi::p2::add_to_linker_sync;
 use wasm_component_middleware_wasi::p2::add_to_linker_sync;
 
 add_to_linker_sync(&mut linker)?;
 ```
 
-The middleware linker routes every interface linked by the matching Wasmtime
-49 function. Async Preview 2 uses
-`wasm_component_middleware_wasi::p2::add_to_linker_async` in the same way.
-After registering WASI and application imports, use the WASI-aware strict
-check; it has no unchecked prefixes:
+Async Preview 2 uses `p2::add_to_linker_async`. Preview 3 uses
+`p3::add_to_linker`, normally alongside the async Preview 2 linker because
+Rust Preview 3 components still use Preview 2 imports through the standard
+library. After registering WASI and application imports, use the WASI-aware
+strict check:
 
 ```rust
 wasm_component_middleware_wasi::verify_routing(
@@ -98,55 +77,16 @@ wasm_component_middleware_wasi::verify_routing(
 )?;
 ```
 
-The [`wasi-p2` example](crates/wasm-component-middleware-wasi/examples/wasi-p2.rs)
-runs a Rust guest that reads an environment variable and the wall clock before
-writing to standard output:
-
-```console
-$ cargo run --example wasi-p2
-→ #1 import wasi:cli/environment@0.2.12.get-environment()
-← #1 returned
-→ #2 import wasi:clocks/wall-clock@0.2.12.now()
-← #2 returned
-...
-Hello from WASI at 1700000000.123456789
-```
-
-Preview 3 uses the same one-line switch:
-
-```rust
-// use wasmtime_wasi::p3::add_to_linker;
-use wasm_component_middleware_wasi::p3::add_to_linker;
-
-add_to_linker(&mut linker)?;
-```
-
-Rust Preview 3 components still import Preview 2 through the standard library,
-so link `wasm_component_middleware_wasi::p2::add_to_linker_async` as well. The
-[`wasi-p3` example](crates/wasm-component-middleware-wasi/examples/wasi-p3.rs)
-shows both linker calls and the concurrent export invocation. A refusal of
-filesystem `read-via-stream`, `write-via-stream`, `append-via-stream`, or
-`read-directory` traps because those Preview 3 calls have no top-level error
-result.
-
-To run a command component as a traced program, preopening the current
-directory read-only, use:
-
-```console
-$ cargo run --example run -- path/to/component.wasm [args...]
-```
-
-Add `--inherit-env` before the component path when the guest should receive the
-host environment. The runner accepts Preview 2 and Preview 3
-`wasi:cli/command` components and writes the guest's normal output unchanged
-while the WASI trace goes to standard error.
+The [Preview 2](examples/wasi-p2/README.md) and
+[Preview 3](examples/wasi-p3/README.md) examples show both linker styles. The
+[command runner](examples/run/README.md) accepts either command-component
+version.
 
 ## Streams
 
-Preview 3 moves filesystem, socket, and stdio bytes through Component Model
-streams rather than host calls. The default `p3::add_to_linker` gates the call
-that opens each stream but leaves its bytes on Wasmtime's direct path. This also
-preserves Wasmtime's `try_into` short circuit for host-to-host streams.
+Preview 3 moves filesystem, socket, and standard-I/O bytes through Component
+Model streams. The default `p3::add_to_linker` gates the call that opens each
+stream but leaves its bytes on Wasmtime's direct path.
 
 Use the opt-in relay when middleware must inspect or restrict every chunk:
 
@@ -159,250 +99,58 @@ add_to_linker_with_stream_relay(&mut linker, StreamRelay::default())?;
 ```
 
 The default queue bound is 64 KiB. A different nonzero bound can be selected
-with a const generic, for example `StreamRelay::<8192>::new()`. Relayed chunks
-appear as `[stream-read]read-via-stream`,
-`[stream-write]write-via-stream`, or
-`[stream-write]append-via-stream` calls. Stdio uses the same stream call names
-under its `wasi:cli/stdin`, `stdout`, or `stderr` interface, and TCP uses
-socket-specific names. Chunks reuse the opening call's id and handles;
-`args["bytes"]` exposes the complete chunk because relay
-data has already been copied. Ordinary gate argument snapshots retain the
-64-byte cap. Refusing a chunk leaves it unacknowledged, drains all
-previously approved chunks. The guest sees the interface's recoverable denial:
-filesystem returns `error-code::access`, stdio returns an I/O error, and TCP
-returns `error-code::access-denied`.
-The [`byte-budget` example](crates/wasm-component-middleware-wasi/examples/byte-budget.rs)
-uses this path to share a 100 KiB read allowance across stores.
+with a const generic, such as `StreamRelay::<8192>::new()`. Relayed chunks
+appear as `[stream-read]` or `[stream-write]` calls and expose their complete
+bytes through `Call::args`. Relaying copies bytes through a bounded host queue,
+so it is opt-in. The [byte-budget example](examples/byte-budget/README.md)
+shares one allowance across relayed reads in two stores.
 
-Relaying copies bytes through a bounded host queue. On the direct filesystem
-path this can reduce throughput by about 40%; the buffered path is usually much
-closer. The ignored `relay_throughput` test measures both paths over a 64 MiB
-file in a release build.
+## Files and sockets
 
-## Files
+Filesystem gates expose paths through `Call::args` and descriptors through
+`Completion::produced`. `OpenFiles` tracks descriptor creation and resource
+drops to enforce a per-invocation limit. Policies should follow descriptor
+identity rather than trying to resolve path strings like Wasmtime does. The
+[sandbox example](examples/sandbox/README.md) combines both techniques.
 
-Filesystem gates expose paths through `Call::args` and report every descriptor
-in `Completion::produced`, including preopened directories. `OpenFiles` uses
-those descriptors and their resource-drop calls to enforce a per-invocation
-limit:
+Socket gates expose bind, connect, stream, and datagram destinations as
+standard `host:port` strings. Preview 3 accepted TCP sockets are created inside
+a returned resource stream and therefore are not individually visible to
+layers. The [network allowlist](examples/net-allowlist/README.md) applies one
+policy to both WASI previews.
 
-```rust
-let chain = Chain::builder()
-    .layer(Logger::stderr())
-    .layer(OpenFiles::new(4))
-    .layer(RefusePrivate)
-    .build();
-```
-
-The path policy in the [`sandbox` example](crates/wasm-component-middleware-wasi/examples/sandbox.rs)
-labels the descriptors returned for a private preopen, propagates that label
-through descriptors opened beneath it, and removes labels when descriptors are
-dropped. It refuses path-taking calls based on their handles. Matching path
-strings is incorrect because middleware does not resolve `..` or symlinks the
-way wasmtime-wasi does. Both the descriptor policy and limit become
-`error-code::access` results visible to the guest:
-
-```console
-$ cargo run --example sandbox
-...
-read public/note.txt: hello
-read private/secret.txt: access
-escape from public preopen: access
-open public/one.txt: allowed
-open public/two.txt: allowed
-open public/three.txt: access
-```
-
-## Sockets
-
-Preview 2 and Preview 3 socket gates expose bind, connect, UDP send, stream,
-and datagram destinations through `Call::args`. An `ip-socket-address` is
-rendered as a standard `host:port` string, so a layer can use `SocketAddr`
-instead of reimplementing the WIT variants. Preview 3 TCP byte streams also
-use [`StreamRelay`](#streams) when it is enabled. The
-[`net-allowlist` example](crates/wasm-component-middleware-wasi/examples/net-allowlist.rs)
-runs the same policy against both previews, allowing one loopback destination
-and refusing another. Its Preview 2 UDP policy checks both the optional address
-passed to `udp-socket.stream` and every datagram destination; Preview 3 checks
-`udp-socket.connect` before allowing address-free sends on a connected socket,
-as well as the optional destination passed to `udp-socket.send`:
-
-```rust
-let allowed = call
-    .args
-    .get("remote_address")
-    .and_then(ArgumentValue::as_str)
-    .and_then(|address| address.parse::<SocketAddr>().ok())
-    .is_some_and(|address| address == self.0);
-if allowed {
-    Ok(())
-} else {
-    Err(Denied::new("remote address is not allowed"))
-}
-```
-
-```console
-$ cargo run --example net-allowlist
-...
-→ #12 import wasi:sockets/tcp@0.2.12.[method]tcp-socket.start-connect(remote_address="127.0.0.1:62502") handles=[1, 0]
-← #12 returned
-...
-→ #25 import wasi:sockets/tcp@0.2.12.[method]tcp-socket.start-connect(remote_address="127.0.0.1:62503") handles=[1, 0]
-← #25 failed: remote address is not allowed
-...
-→ #34 import wasi:sockets/udp@0.2.12.[method]outgoing-datagram-stream.send(datagrams=[[3 bytes "udp", some("127.0.0.1:62503")]]) handles=[3]
-← #34 failed: remote address is not allowed
-...
-→ #45 import wasi:sockets/udp@0.2.12.[method]outgoing-datagram-stream.send(datagrams=[[3 bytes "udp", some("127.0.0.1:62502")]]) handles=[2]
-← #45 returned
-...
-→ #4 import wasi:sockets/types@0.3.0.[method]tcp-socket.connect(remote_address="127.0.0.1:62504") handles=[0]
-← #4 returned
-...
-→ #18 import wasi:sockets/types@0.3.0.[method]udp-socket.send(data=3 bytes "udp", remote_address=some("127.0.0.1:62505")) handles=[0]
-← #18 failed: remote address is not allowed
-...
-→ #21 import wasi:sockets/types@0.3.0.[method]udp-socket.connect(remote_address="127.0.0.1:62505") handles=[0]
-← #21 failed: remote address is not allowed
-p2:
-allowed: hello
-denied: access-denied
-udp allowed: delivered
-udp denied: access-denied
-p3:
-allowed: hello
-denied: access-denied
-udp allowed: delivered
-udp denied: access-denied
-udp connected denied: access-denied
-```
-
-Preview 3 layers can gate `tcp-socket.listen`, but Wasmtime creates accepted
-TCP sockets inside its returned resource stream. Those individual sockets are
-therefore not visible to layers. Preview 2 `tcp-socket.accept` calls remain
-individually visible.
-
-If a component must never use sockets, do not link the socket interfaces.
-That is cheaper and less error-prone than gating their large API surface.
+If a component must never use a capability, omit its interfaces from the
+linker. That is cheaper and less error-prone than gating every call.
 
 ## HTTP
 
-Switch the `wasi:http` linker functions to the matching module in
-`wasm-component-middleware-wasi-http`. Preview 2 exposes the same async, sync,
-and HTTP-only entry points as `wasmtime-wasi-http`; Preview 3 exposes
-`p3::add_to_linker`. Every call in `wasi:http/types`,
-`wasi:http/outgoing-handler`, and `wasi:http/client` then reaches middleware.
-Preview 2 bodies are visible through `wasi:io/streams` when the HTTP-only
-linker is combined with `wasm-component-middleware-wasi`'s synchronous gates.
-The convenience `p2::add_to_linker_async` routes the Preview 2 proxy interfaces
-through the same chain. Preview 3 body streams currently pass through without
-a byte relay.
-
-Per-function gates do not see a complete request while it is being assembled.
-Install `WasiHttpHooks` beside `WasiHttpCtx` to route the final request through
-one synthetic `wasi:http/request-hook.[send-request]` call. The pseudo-interface
-is shared by both HTTP versions because Wasmtime exposes one common hook. Its
-arguments contain `method`, `scheme`, `authority`, `path`, and `headers`; a refusal becomes
-`error-code::http-request-denied`:
+Use the matching module in `wasm-component-middleware-wasi-http` instead of the
+corresponding `wasmtime-wasi-http` linker function. Per-function gates observe
+`wasi:http` calls. To inspect a complete request, install `WasiHttpHooks`
+beside `WasiHttpCtx`; it routes one synthetic
+`wasi:http/request-hook.[send-request]` call with the method, scheme,
+authority, path, and headers.
 
 ```rust
-let policy_chain = Chain::builder()
-    .layer(Logger::stderr())
-    .layer(AllowAuthority(allowed_authority))
-    .build();
 let policy = HttpPolicy {
-    middleware: MiddlewareCtx::new(
-        policy_chain,
-        InvocationContext::new("http-client"),
-    ),
+    middleware: MiddlewareCtx::new(policy_chain, InvocationContext::new("http-client")),
 };
 let hooks = WasiHttpHooks::new(policy, DefaultHooks);
-
-impl WasiHttpView for State {
-    fn http(&mut self) -> WasiHttpCtxView<'_> {
-        WasiHttpCtxView {
-            ctx: &mut self.http,
-            table: &mut self.table,
-            hooks: &mut self.hooks,
-        }
-    }
-}
 ```
 
-The hook owns a small, separately locked policy state because Wasmtime lends
-only `&mut dyn WasiHttpHooks` at the complete-request seam. Its chain is
-independent from the store chain: the two chains have separate state and call
-identifiers, and their calls are not correlated. On Preview 2, the store
-chain's `wasi:http/outgoing-handler.handle` call returns before the request hook
-decides because Wasmtime sends the request from a spawned task. Put the same
-`Arc`-backed layer in both chains when they need shared policy or observations.
-Existing custom hooks are passed as the second constructor argument and remain
-the delegate; `DefaultHooks` preserves Wasmtime's default sender.
-
-An HTTP policy is required even when sockets are restricted:
-wasmtime-wasi-http's default sender opens TCP connections directly and does
-not consult `WasiCtx`'s socket address check. The
-[`http-allowlist` example](crates/wasm-component-middleware-wasi-http/examples/http-allowlist.rs)
-starts two loopback servers, allows one authority, and returns
-`HttpRequestDenied` for the other:
-
-```console
-$ cargo run --example http-allowlist
-→ #1 import wasi:http/request-hook.[send-request](method="GET", scheme="http", authority="127.0.0.1:62502", ...)
-← #1 returned
-allowed body: GET http://127.0.0.1:62502/message x-client=middleware -> 201 x-server=loopback | hello from the allowed server
-→ #2 import wasi:http/request-hook.[send-request](method="GET", scheme="http", authority="127.0.0.1:62503", ...)
-← #2 failed: authority is not allowed
-denied error: ErrorCode::HttpRequestDenied
-```
-
-## Refusing calls
-
-The [`deny` example](crates/wasm-component-middleware/examples/deny.rs) puts a
-logger outside an allowlist that permits the root export and `log`, but refuses
-`user-name`:
-
-```rust
-let calls = Allowlist::new()
-    .allow_function(None, "greet")
-    .allow_function(Some(HELLO_HOST.name()), "log");
-let chain = Chain::builder()
-    .layer(Logger::stderr())
-    .layer(calls)
-    .build();
-```
-
-For an imported function whose WIT result has no error case, a `Denied` error
-becomes a trap and the trapped store cannot be entered again. If refusal is an
-expected guest-visible outcome, model it in WIT as a `result` and map the
-denial into its error variant instead of propagating a Wasmtime error.
-
-## Examples
-
-- [`trace`](crates/wasm-component-middleware/examples/trace.rs) logs a nested export and its host imports.
-- [`deny`](crates/wasm-component-middleware/examples/deny.rs) combines logging with a function allowlist.
-- [`run`](crates/wasm-component-middleware-wasi/examples/run.rs) runs and traces any Preview 2 or Preview 3 WASI command.
-- [`wasi-p2`](crates/wasm-component-middleware-wasi/examples/wasi-p2.rs) traces synchronous Preview 2 environment, clock, and output calls.
-- [`wasi-p3`](crates/wasm-component-middleware-wasi/examples/wasi-p3.rs) traces concurrent Preview 3 calls and Rust's Preview 2 imports.
-- [`random`](crates/wasm-component-middleware-wasi/examples/random.rs) replaces and refuses random-number calls.
-- [`sandbox`](crates/wasm-component-middleware-wasi/examples/sandbox.rs) applies descriptor-aware path policy and an open-file limit.
-- [`byte-budget`](crates/wasm-component-middleware-wasi/examples/byte-budget.rs) enforces a shared allowance over relayed Preview 3 stream chunks.
-- [`net-allowlist`](crates/wasm-component-middleware-wasi/examples/net-allowlist.rs) applies one destination policy to Preview 2 and Preview 3 sockets.
-- [`http-allowlist`](crates/wasm-component-middleware-wasi-http/examples/http-allowlist.rs) checks complete outgoing HTTP requests at the send hook.
+The hook's chain is separate from the store chain. Put the same `Arc`-backed
+layer in both when they need shared state. An HTTP policy is still required
+when sockets are restricted because Wasmtime's default sender opens its own
+connections. See the [HTTP allowlist example](examples/http-allowlist/README.md).
 
 ## Composition and limitations
 
-Splicer and similar composition-time tools place middleware components into the
-component graph. This library instead runs middleware in the Wasmtime host. It
-can inspect host state and the WASI edges implemented by the host, without
-requiring a middleware component to be distributed with each guest. The two
-approaches can be used together.
+This library runs middleware in the Wasmtime host. Composition-time tools can
+still wrap the component graph independently, and the two approaches can be
+used together.
 
 Application bindings must enable Wasmtime's `trappable` imports for a layer to
-refuse calls. WASI gates are tied to the exact WIT and generated traits in one
-Wasmtime release, so this workspace provides version-specific gates and pins
-Wasmtime 49. Preview 3 byte relaying is opt-in because it copies data through a
-bounded host queue and can reduce throughput. Without relaying, middleware sees
-the calls that create streams but not each byte chunk. Preview 3 accepted TCP
-sockets are also produced inside Wasmtime's resource stream and are not
-individually visible to layers.
+refuse a call. WASI gates are tied to the generated traits in one Wasmtime
+release, so this workspace pins Wasmtime 49. Preview 3 byte relaying is opt-in,
+Preview 3 accepted TCP sockets are not individually visible, and Preview 3 HTTP
+body streams currently pass through without a byte relay.

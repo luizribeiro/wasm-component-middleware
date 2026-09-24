@@ -1,0 +1,5 @@
+package example:wasi-p2;
+
+world workload {
+  export basic-system: func();
+}

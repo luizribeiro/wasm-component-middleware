@@ -1568,6 +1568,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
+name = "wasi-p2"
+version = "0.0.0"
+dependencies = [
+ "guest-build",
+ "wasm-component-middleware",
+ "wasm-component-middleware-wasi",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "wasm-component-middleware"
 version = "0.0.0"
 dependencies = [

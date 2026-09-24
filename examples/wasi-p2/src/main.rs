@@ -9,7 +9,7 @@ use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi::{HostWallClock, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
-    path: "../../support/fixtures/wasi-p2/wit",
+    path: "guest/wit",
     world: "workload",
 });
 
@@ -48,7 +48,7 @@ impl HostWallClock for ReviewClock {
 
 fn main() -> wasmtime::Result<()> {
     let engine = Engine::default();
-    let component = Component::from_file(&engine, guest_build::wasi_p2())?;
+    let component = Component::from_file(&engine, guest_build::example("wasi-p2"))?;
     let mut linker = Linker::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker)?;
 

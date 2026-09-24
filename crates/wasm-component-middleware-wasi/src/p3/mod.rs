@@ -88,6 +88,23 @@ pub fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     T: WasiView + MiddlewareView + 'static,
 {
+    add_to_linker_with_options(linker, &wasmtime_wasi::p3::bindings::LinkOptions::default())
+}
+
+/// Adds Preview 3 interfaces with middleware gates and linker options.
+///
+/// This mirrors [`wasmtime_wasi::p3::add_to_linker_with_options`].
+///
+/// # Errors
+///
+/// Returns an error if Wasmtime cannot register an interface.
+pub fn add_to_linker_with_options<T>(
+    linker: &mut Linker<T>,
+    _options: &wasmtime_wasi::p3::bindings::LinkOptions,
+) -> wasmtime::Result<()>
+where
+    T: WasiView + MiddlewareView + 'static,
+{
     filesystem::add_to_linker(linker)?;
     random::add_to_linker(linker)?;
     sockets::add_to_linker(linker)?;

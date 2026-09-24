@@ -971,6 +971,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
+name = "net-allowlist"
+version = "0.0.0"
+dependencies = [
+ "guest-build",
+ "tokio",
+ "wasm-component-middleware",
+ "wasm-component-middleware-wasi",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "object"
 version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
+  "cat-p2",
+  "cat-p3",
   "hello",
   "http-p2",
   "http-p3",

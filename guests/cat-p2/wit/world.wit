@@ -1,0 +1,5 @@
+package example:cat-p2;
+
+world cat-p2 {
+  include wasi:cli/command@0.2.12;
+}

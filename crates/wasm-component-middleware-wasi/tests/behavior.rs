@@ -1966,6 +1966,141 @@ fn wasi_example_prints_the_trace_and_guest_output() {
 }
 
 #[test]
+fn run_example_traces_preview_2_and_preview_3_commands() {
+    let directory = tempfile::tempdir().unwrap();
+    let contents = "middleware kept this output\n".repeat(200);
+    std::fs::write(directory.path().join("note.txt"), &contents).unwrap();
+    let guests = [
+        (
+            test_guests::cat_p2(),
+            "wasi:io/streams@0.2.12.[method]output-stream.blocking-write-and-flush",
+        ),
+        (
+            test_guests::cat_p3(),
+            "wasi:cli/stdout@0.3.0.write-via-stream",
+        ),
+    ];
+
+    for (guest, expected_call) in guests {
+        let output = test_guests::run_example_with_args(
+            "wasm-component-middleware-wasi",
+            "run",
+            &[guest.to_str().unwrap(), "note.txt"],
+            directory.path(),
+        )
+        .unwrap();
+
+        test_guests::assert_example_succeeded(&output);
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), contents);
+        let trace = String::from_utf8(output.stderr).unwrap();
+        assert!(trace.contains(expected_call), "{trace}");
+        assert!(trace.contains("wasi:filesystem/types"), "{trace}");
+    }
+}
+
+#[test]
+fn run_example_propagates_guest_exit_codes() {
+    for (code, success) in [(0, true), (3, false)] {
+        let argument = format!("--exit={code}");
+        let output = test_guests::run_example_with_args(
+            "wasm-component-middleware-wasi",
+            "run",
+            &[test_guests::cat_p2().to_str().unwrap(), &argument],
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).as_path(),
+        )
+        .unwrap();
+
+        assert_eq!(output.status.success(), success);
+        assert_eq!(output.status.code(), Some(code));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!stderr.contains("wasm backtrace"), "{stderr}");
+    }
+}
+
+#[tokio::test]
+async fn command_guests_match_plain_wasi() {
+    for (guest, preview_3) in [
+        (test_guests::cat_p2(), false),
+        (test_guests::cat_p3(), true),
+    ] {
+        let plain = run_command_guest(guest, preview_3, false).await.unwrap();
+        let gated = run_command_guest(guest, preview_3, true).await.unwrap();
+
+        assert_eq!(gated, plain);
+        assert_eq!(plain, b"differential output\n");
+    }
+}
+
+async fn run_command_guest(
+    guest: &std::path::Path,
+    preview_3: bool,
+    gated: bool,
+) -> wasmtime::Result<Vec<u8>> {
+    let mut config = Config::new();
+    config.wasm_component_model_async(true);
+    config.concurrency_support(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::from_file(&engine, guest)?;
+    let mut linker = Linker::new(&engine);
+    if gated {
+        wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
+    } else {
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    }
+    if preview_3 {
+        if gated {
+            wasm_component_middleware_wasi::p3::add_to_linker(&mut linker)?;
+        } else {
+            wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+        }
+    }
+
+    let directory = tempfile::tempdir()?;
+    fs::write(directory.path().join("note.txt"), b"differential output\n")?;
+    let stdout = MemoryOutputPipe::new(4096);
+    let mut wasi = WasiCtxBuilder::new();
+    wasi.args(&["cat", "note.txt"])
+        .stdout(stdout.clone())
+        .preopened_dir(directory.path(), ".", FsPerms::ReadOnly)?;
+    let chain = Chain::builder().build();
+    let mut store = Store::new(
+        &engine,
+        State {
+            middleware: Some(MiddlewareCtx::new(
+                chain,
+                InvocationContext::new("differential"),
+            )),
+            table: ResourceTable::new(),
+            wasi: wasi.build(),
+        },
+    );
+
+    if preview_3 {
+        let command = wasmtime_wasi::p3::bindings::Command::instantiate_async(
+            &mut store, &component, &linker,
+        )
+        .await?;
+        let result = store
+            .run_concurrent(async move |accessor| command.wasi_cli_run().call_run(accessor).await)
+            .await??;
+        result.map_err(|()| wasmtime::Error::msg("command returned failure"))?;
+    } else {
+        let command = wasmtime_wasi::p2::bindings::Command::instantiate_async(
+            &mut store, &component, &linker,
+        )
+        .await?;
+        command
+            .wasi_cli_run()
+            .call_run(&mut store)
+            .await?
+            .map_err(|()| wasmtime::Error::msg("command returned failure"))?;
+    }
+
+    Ok(stdout.contents().to_vec())
+}
+
+#[test]
 fn wasi_p3_example_prints_the_trace_and_guest_output() {
     let output = test_guests::run_example("wasm-component-middleware-wasi", "wasi-p3").unwrap();
 

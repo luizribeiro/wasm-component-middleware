@@ -25,6 +25,20 @@ const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// collected, its build exceeds five minutes, or three launch attempts each
 /// exceed one minute.
 pub fn run_example(package: &str, example: &str) -> io::Result<Output> {
+    run_example_with_args(package, example, &[], &workspace_root())
+}
+
+/// Runs a workspace example with arguments and a selected working directory.
+///
+/// # Errors
+///
+/// Returns the same bounded build and execution errors as [`run_example`].
+pub fn run_example_with_args(
+    package: &str,
+    example: &str,
+    args: &[&str],
+    current_dir: &Path,
+) -> io::Result<Output> {
     let _lock = example_lock()?;
     let workspace = workspace_root();
     let mut build = Command::new(env!("CARGO"));
@@ -47,7 +61,7 @@ pub fn run_example(package: &str, example: &str) -> io::Result<Output> {
     let executable = example_executable(example);
     for attempt in 0..3 {
         let mut command = Command::new(&executable);
-        command.current_dir(&workspace);
+        command.current_dir(current_dir).args(args);
         match output_with_timeout(&mut command, EXAMPLE_TIMEOUT) {
             Err(error) if error.kind() == io::ErrorKind::TimedOut && attempt < 2 => {}
             result => return result,
@@ -155,6 +169,18 @@ fn join_reader(reader: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Ve
 #[must_use]
 pub fn hello() -> &'static Path {
     Path::new(env!("HELLO_COMPONENT"))
+}
+
+/// Returns the path to the Preview 2 command that prints a file.
+#[must_use]
+pub fn cat_p2() -> &'static Path {
+    Path::new(env!("CAT_P2_COMPONENT"))
+}
+
+/// Returns the path to the Preview 3 command that prints a file.
+#[must_use]
+pub fn cat_p3() -> &'static Path {
+    Path::new(env!("CAT_P3_COMPONENT"))
 }
 
 /// Returns the path to the Preview 2 outgoing HTTP client.

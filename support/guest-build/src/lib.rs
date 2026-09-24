@@ -1,4 +1,4 @@
-//! Build-time access to WebAssembly components used by workspace tests.
+//! Build-time access to WebAssembly components used by tests and examples.
 //!
 //! The components are built in an isolated guest workspace so host workspace
 //! commands never compile guest crates for the native target.
@@ -12,30 +12,25 @@ use std::time::{Duration, Instant};
 
 const BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(60);
+const LAUNCH_ATTEMPTS: usize = 10;
 
-/// Runs a workspace example for an output assertion with a bounded lifetime.
-///
-/// Use this in integration tests that verify an example's standard output and
-/// standard error. A timed-out subprocess is killed and reported as an I/O
-/// error so one stuck executable cannot block the test suite indefinitely.
+/// Runs a workspace package for an output assertion with a bounded lifetime.
 ///
 /// # Errors
 ///
-/// Returns an error when the process cannot be started, its output cannot be
-/// collected, its build exceeds five minutes, or three launch attempts each
-/// exceed one minute.
-pub fn run_example(package: &str, example: &str) -> io::Result<Output> {
-    run_example_with_args(package, example, &[], &workspace_root())
+/// Returns an error when the package cannot be built or run within the
+/// configured time bounds.
+pub fn run_package(package: &str) -> io::Result<Output> {
+    run_package_with_args(package, &[], &workspace_root())
 }
 
-/// Runs a workspace example with arguments and a selected working directory.
+/// Runs a workspace package with arguments and a selected working directory.
 ///
 /// # Errors
 ///
-/// Returns the same bounded build and execution errors as [`run_example`].
-pub fn run_example_with_args(
+/// Returns the same bounded build and execution errors as [`run_package`].
+pub fn run_package_with_args(
     package: &str,
-    example: &str,
     args: &[&str],
     current_dir: &Path,
 ) -> io::Result<Output> {
@@ -45,10 +40,9 @@ pub fn run_example_with_args(
     build.current_dir(&workspace).args([
         "build",
         "--quiet",
+        "--release",
         "-p",
         package,
-        "--example",
-        example,
         "--locked",
     ]);
     let build = output_with_timeout(&mut build, BUILD_TIMEOUT)?;
@@ -58,12 +52,16 @@ pub fn run_example_with_args(
             String::from_utf8_lossy(&build.stderr)
         )));
     }
-    let executable = example_executable(example);
-    for attempt in 0..3 {
-        let mut command = Command::new(&executable);
+    run_bounded(&package_executable(package), args, current_dir)
+}
+
+fn run_bounded(executable: &Path, args: &[&str], current_dir: &Path) -> io::Result<Output> {
+    for attempt in 0..LAUNCH_ATTEMPTS {
+        let mut command = Command::new(executable);
         command.current_dir(current_dir).args(args);
         match output_with_timeout(&mut command, EXAMPLE_TIMEOUT) {
-            Err(error) if error.kind() == io::ErrorKind::TimedOut && attempt < 2 => {}
+            Err(error)
+                if error.kind() == io::ErrorKind::TimedOut && attempt + 1 < LAUNCH_ATTEMPTS => {}
             result => return result,
         }
     }
@@ -95,8 +93,8 @@ fn example_lock() -> io::Result<File> {
     Ok(lock)
 }
 
-fn example_executable(example: &str) -> PathBuf {
-    let mut path = target_dir().join("debug/examples").join(example);
+fn package_executable(package: &str) -> PathBuf {
+    let mut path = target_dir().join("release").join(package);
     if cfg!(windows) {
         path.set_extension("exe");
     }
@@ -110,6 +108,13 @@ fn target_dir() -> PathBuf {
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// Returns a component built from `examples/<name>/guest`.
+#[must_use]
+pub fn example(name: &str) -> PathBuf {
+    let artifact = name.replace('-', "_") + "_guest.wasm";
+    Path::new(env!("GUEST_BUILD_DIR")).join(artifact)
 }
 
 fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
@@ -245,7 +250,7 @@ mod tests {
 
     mod p2 {
         wasmtime::component::bindgen!({
-            path: "../../guests/smoke-p2/wit",
+            path: "../fixtures/smoke-p2/wit",
             world: "smoke-p2",
             exports: { default: async },
             require_store_data_send: true,
@@ -254,7 +259,7 @@ mod tests {
 
     mod p3 {
         wasmtime::component::bindgen!({
-            path: "../../guests/smoke-p3/wit",
+            path: "../fixtures/smoke-p3/wit",
             world: "smoke-p3",
             exports: { default: async | store },
             require_store_data_send: true,

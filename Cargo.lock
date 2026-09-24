@@ -558,6 +558,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-build"
+version = "0.0.0"
+dependencies = [
+ "tokio",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1339,15 +1348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "test-guests"
-version = "0.0.0"
-dependencies = [
- "tokio",
- "wasmtime",
- "wasmtime-wasi",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1551,7 +1551,7 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 name = "wasm-component-middleware"
 version = "0.0.0"
 dependencies = [
- "test-guests",
+ "guest-build",
  "wasmtime",
  "wasmtime-wasi",
 ]
@@ -1561,8 +1561,8 @@ name = "wasm-component-middleware-wasi"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "guest-build",
  "tempfile",
- "test-guests",
  "tokio",
  "wasm-component-middleware",
  "wasmtime",
@@ -1576,11 +1576,11 @@ name = "wasm-component-middleware-wasi-http"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "guest-build",
  "http",
  "http-body-util",
  "hyper",
  "rustls",
- "test-guests",
  "tokio",
  "wasm-component-middleware",
  "wasm-component-middleware-wasi",

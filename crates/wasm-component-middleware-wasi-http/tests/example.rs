@@ -18,9 +18,9 @@ fn strip_ports(output: &str) -> String {
 #[test]
 fn http_allowlist_example_prints_trace_body_and_denial() {
     let output =
-        test_guests::run_example("wasm-component-middleware-wasi-http", "http-allowlist").unwrap();
+        guest_build::run_example("wasm-component-middleware-wasi-http", "http-allowlist").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert_eq!(
         strip_ports(&String::from_utf8(output.stdout).unwrap()),
         concat!(

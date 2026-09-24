@@ -15,7 +15,7 @@ wasmtime-wasi.workspace = true
 [dev-dependencies]
 bytes = "1"
 tempfile = "3"
-test-guests = { path = "../test-guests" }
+guest-build = { path = "../../support/guest-build" }
 tokio.workspace = true
 wasmtime = { workspace = true, features = ["cranelift"] }
 wit-component = { version = "0.258", features = ["dummy-module"] }

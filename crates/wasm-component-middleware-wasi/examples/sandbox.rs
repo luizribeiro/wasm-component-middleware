@@ -13,7 +13,7 @@ use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
-    path: "../../guests/sandbox/wit",
+    path: "../../support/fixtures/sandbox/wit",
     world: "sandbox",
 });
 
@@ -148,7 +148,7 @@ fn main() -> wasmtime::Result<()> {
     fs::write(private.join("secret.txt"), "classified")?;
 
     let engine = Engine::default();
-    let component = Component::from_file(&engine, test_guests::sandbox())?;
+    let component = Component::from_file(&engine, guest_build::sandbox())?;
     let mut linker = Linker::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker)?;
 

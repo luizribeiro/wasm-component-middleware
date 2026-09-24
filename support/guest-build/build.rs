@@ -1,4 +1,4 @@
-//! Builds the isolated WebAssembly guest workspace for host-side tests.
+//! Builds isolated WebAssembly guest workspaces for host-side use.
 
 use std::env;
 use std::ffi::OsStr;
@@ -8,7 +8,8 @@ use std::process::Command;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crate_dir = PathBuf::from(required_var("CARGO_MANIFEST_DIR")?);
-    let guest_manifest = crate_dir.join("../../guests/Cargo.toml");
+    let repository = crate_dir.join("../..");
+    let fixture_manifest = repository.join("support/fixtures/Cargo.toml");
     let out_dir = PathBuf::from(required_var("OUT_DIR")?);
     let main_target_dir = out_dir
         .ancestors()
@@ -16,29 +17,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| io::Error::other("OUT_DIR is not inside Cargo's target directory"))?;
     let guest_target_dir = main_target_dir.join("guest-build");
 
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut command = Command::new(cargo);
-    command.args([
-        OsStr::new("build"),
-        OsStr::new("--release"),
-        OsStr::new("--target"),
-        OsStr::new("wasm32-wasip2"),
-        OsStr::new("--manifest-path"),
-        guest_manifest.as_os_str(),
-        OsStr::new("--target-dir"),
-        guest_target_dir.as_os_str(),
-        OsStr::new("--locked"),
-    ]);
-    for (key, _) in env::vars_os() {
-        if key.to_string_lossy().starts_with("CARGO_") || key == "RUSTFLAGS" {
-            command.env_remove(key);
-        }
-    }
-
-    let status = command.status()?;
-    if !status.success() {
-        return Err(io::Error::other(format!("guest build failed with {status}")).into());
-    }
+    build_guest_workspace(&fixture_manifest, &guest_target_dir)?;
+    build_example_guests(&repository, &guest_target_dir)?;
 
     let release_dir = guest_target_dir.join("wasm32-wasip2/release");
     emit_guest_path("CAT_P2_COMPONENT", &release_dir.join("cat_p2.wasm"));
@@ -59,10 +39,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     emit_guest_path("WASI_P2_COMPONENT", &release_dir.join("wasi_p2.wasm"));
     emit_guest_path("WASI_P3_COMPONENT", &release_dir.join("wasi_p3.wasm"));
+    println!("cargo::rustc-env=GUEST_BUILD_DIR={}", release_dir.display());
     println!(
         "cargo::rerun-if-changed={}",
-        crate_dir.join("../../guests").display()
+        repository.join("support/fixtures").display()
     );
+    let examples = repository.join("examples");
+    if examples.exists() {
+        println!("cargo::rerun-if-changed={}", examples.display());
+    }
+    Ok(())
+}
+
+fn build_example_guests(repository: &Path, target_dir: &Path) -> io::Result<()> {
+    let examples = repository.join("examples");
+    if !examples.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(examples)? {
+        let manifest = entry?.path().join("guest/Cargo.toml");
+        if manifest.is_file() {
+            build_guest_workspace(&manifest, target_dir)?;
+        }
+    }
+    Ok(())
+}
+
+fn build_guest_workspace(manifest: &Path, target_dir: &Path) -> io::Result<()> {
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
+    command.args([
+        OsStr::new("build"),
+        OsStr::new("--release"),
+        OsStr::new("--target"),
+        OsStr::new("wasm32-wasip2"),
+        OsStr::new("--manifest-path"),
+        manifest.as_os_str(),
+        OsStr::new("--target-dir"),
+        target_dir.as_os_str(),
+        OsStr::new("--locked"),
+    ]);
+    for (key, _) in env::vars_os() {
+        if key.to_string_lossy().starts_with("CARGO_") || key == "RUSTFLAGS" {
+            command.env_remove(key);
+        }
+    }
+
+    let status = command.status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "guest build failed with {status}"
+        )));
+    }
     Ok(())
 }
 

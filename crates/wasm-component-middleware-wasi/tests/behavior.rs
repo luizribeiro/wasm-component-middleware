@@ -27,13 +27,13 @@ use wasmtime_wasi::{
 use wit_parser::{Resolve, TypeDefKind};
 
 wasmtime::component::bindgen!({
-    path: "../../guests/wasi-p2/wit",
+    path: "../../support/fixtures/wasi-p2/wit",
     world: "workload",
 });
 
 mod p3 {
     wasmtime::component::bindgen!({
-        path: "../../guests/wasi-p3/wit",
+        path: "../../support/fixtures/wasi-p3/wit",
         world: "workload",
         imports: { default: async | store },
         exports: { default: async | store },
@@ -44,7 +44,7 @@ mod p3 {
 
 mod p2_async {
     wasmtime::component::bindgen!({
-        path: "../../guests/wasi-p2/wit",
+        path: "../../support/fixtures/wasi-p2/wit",
         world: "workload",
         exports: { default: async },
         require_store_data_send: true,
@@ -53,7 +53,7 @@ mod p2_async {
 
 mod sandbox_guest {
     wasmtime::component::bindgen!({
-        path: "../../guests/sandbox/wit",
+        path: "../../support/fixtures/sandbox/wit",
         world: "sandbox",
     });
 }
@@ -361,7 +361,7 @@ impl P3Harness {
         config.wasm_component_model_async(true);
         config.concurrency_support(true);
         let engine = Engine::new(&config)?;
-        let component = Component::from_file(&engine, test_guests::wasi_p3())?;
+        let component = Component::from_file(&engine, guest_build::wasi_p3())?;
         let mut linker = Linker::new(&engine);
         wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
         if relayed {
@@ -625,7 +625,7 @@ fn p2_fixture(chain: Arc<Chain<State>>) -> P2Fixture {
 impl Harness {
     fn new(gated: bool, chain: Arc<Chain<State>>) -> wasmtime::Result<Self> {
         let engine = Engine::default();
-        let component = Component::from_file(&engine, test_guests::wasi_p2())?;
+        let component = Component::from_file(&engine, guest_build::wasi_p2())?;
         let mut linker = Linker::new(&engine);
         if gated {
             wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker)?;
@@ -663,7 +663,7 @@ impl AsyncP2Harness {
         let mut config = Config::new();
         config.wasm_component_model_async(true);
         let engine = Engine::new(&config)?;
-        let component = Component::from_file(&engine, test_guests::wasi_p2())?;
+        let component = Component::from_file(&engine, guest_build::wasi_p2())?;
         let mut linker = Linker::new(&engine);
         if gated {
             wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
@@ -1948,9 +1948,9 @@ async fn dropping_a_store_with_a_pending_p3_call_does_not_panic() {
 
 #[test]
 fn wasi_example_prints_the_trace_and_guest_output() {
-    let output = test_guests::run_example("wasm-component-middleware-wasi", "wasi-p2").unwrap();
+    let output = guest_build::run_example("wasm-component-middleware-wasi", "wasi-p2").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "Hello from WASI at 1700000000.123456789\n"
@@ -1979,17 +1979,17 @@ fn run_example_traces_preview_2_and_preview_3_commands() {
     std::fs::write(directory.path().join("note.txt"), &contents).unwrap();
     let guests = [
         (
-            test_guests::cat_p2(),
+            guest_build::cat_p2(),
             "wasi:io/streams@0.2.12.[method]output-stream.blocking-write-and-flush",
         ),
         (
-            test_guests::cat_p3(),
+            guest_build::cat_p3(),
             "wasi:cli/stdout@0.3.0.write-via-stream",
         ),
     ];
 
     for (guest, expected_call) in guests {
-        let output = test_guests::run_example_with_args(
+        let output = guest_build::run_example_with_args(
             "wasm-component-middleware-wasi",
             "run",
             &[guest.to_str().unwrap(), "note.txt"],
@@ -1997,7 +1997,7 @@ fn run_example_traces_preview_2_and_preview_3_commands() {
         )
         .unwrap();
 
-        test_guests::assert_example_succeeded(&output);
+        guest_build::assert_example_succeeded(&output);
         assert_eq!(String::from_utf8(output.stdout).unwrap(), contents);
         let trace = String::from_utf8(output.stderr).unwrap();
         assert!(trace.contains(expected_call), "{trace}");
@@ -2009,10 +2009,10 @@ fn run_example_traces_preview_2_and_preview_3_commands() {
 fn run_example_propagates_guest_exit_codes() {
     for (code, success) in [(0, true), (3, false)] {
         let argument = format!("--exit={code}");
-        let output = test_guests::run_example_with_args(
+        let output = guest_build::run_example_with_args(
             "wasm-component-middleware-wasi",
             "run",
-            &[test_guests::cat_p2().to_str().unwrap(), &argument],
+            &[guest_build::cat_p2().to_str().unwrap(), &argument],
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).as_path(),
         )
         .unwrap();
@@ -2028,8 +2028,8 @@ fn run_example_propagates_guest_exit_codes() {
 #[tokio::test]
 async fn command_guests_match_plain_wasi() {
     for (guest, preview_3) in [
-        (test_guests::cat_p2(), false),
-        (test_guests::cat_p3(), true),
+        (guest_build::cat_p2(), false),
+        (guest_build::cat_p3(), true),
     ] {
         let plain = run_command_guest(guest, preview_3, false).await.unwrap();
         let gated = run_command_guest(guest, preview_3, true).await.unwrap();
@@ -2064,7 +2064,7 @@ fn run_sandbox_guest(gated: bool) -> wasmtime::Result<Vec<u8>> {
     fs::write(private.join("secret.txt"), "classified")?;
 
     let engine = Engine::default();
-    let component = Component::from_file(&engine, test_guests::sandbox())?;
+    let component = Component::from_file(&engine, guest_build::sandbox())?;
     let mut linker = Linker::new(&engine);
     if gated {
         wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker)?;
@@ -2163,9 +2163,9 @@ async fn run_command_guest(
 
 #[test]
 fn wasi_p3_example_prints_the_trace_and_guest_output() {
-    let output = test_guests::run_example("wasm-component-middleware-wasi", "wasi-p3").unwrap();
+    let output = guest_build::run_example("wasm-component-middleware-wasi", "wasi-p3").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "Hello from WASI at 1700000000.123456789\n"
@@ -2185,9 +2185,9 @@ fn wasi_p3_example_prints_the_trace_and_guest_output() {
 
 #[test]
 fn byte_budget_example_reports_the_relay_denial() {
-    let output = test_guests::run_example("wasm-component-middleware-wasi", "byte-budget").unwrap();
+    let output = guest_build::run_example("wasm-component-middleware-wasi", "byte-budget").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         "stream read: 106496 bytes in 13 chunks, denied\n"
@@ -2204,9 +2204,9 @@ fn byte_budget_example_reports_the_relay_denial() {
 
 #[test]
 fn random_example_prints_the_trace_and_refusal() {
-    let output = test_guests::run_example("wasm-component-middleware-wasi", "random").unwrap();
+    let output = guest_build::run_example("wasm-component-middleware-wasi", "random").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "dice: 6, 6; bytes: [1, 1, 1, 1]\n"
@@ -2252,9 +2252,9 @@ fn strip_loopback_ports(output: &str) -> String {
 #[test]
 fn net_allowlist_example_traces_addresses_and_reports_access() {
     let output =
-        test_guests::run_example("wasm-component-middleware-wasi", "net-allowlist").unwrap();
+        guest_build::run_example("wasm-component-middleware-wasi", "net-allowlist").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         concat!(
@@ -2338,9 +2338,9 @@ fn net_allowlist_example_traces_addresses_and_reports_access() {
 
 #[test]
 fn sandbox_example_prints_file_policy_results_and_handle_traces() {
-    let output = test_guests::run_example("wasm-component-middleware-wasi", "sandbox").unwrap();
+    let output = guest_build::run_example("wasm-component-middleware-wasi", "sandbox").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         concat!(

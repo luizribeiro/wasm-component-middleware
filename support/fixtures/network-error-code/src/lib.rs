@@ -1,5 +1,5 @@
 wit_bindgen::generate!({
-    path: "../../crates/wasm-component-middleware-wasi/wit",
+    path: "../../../crates/wasm-component-middleware-wasi/wit",
     world: "network-error-code-probe",
     features: ["network-error-code"],
     generate_all,

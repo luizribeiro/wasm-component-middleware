@@ -1,5 +1,5 @@
 [package]
-name = "test-guests"
+name = "guest-build"
 publish = false
 edition.workspace = true
 license.workspace = true

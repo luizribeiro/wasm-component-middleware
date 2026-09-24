@@ -12,7 +12,7 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
-    path: "../../guests/wasi-p3/wit",
+    path: "../../support/fixtures/wasi-p3/wit",
     world: "workload",
     imports: { default: async | store },
     exports: { default: async | store },
@@ -93,7 +93,7 @@ async fn main() -> wasmtime::Result<()> {
     config.wasm_component_model_async(true);
     config.concurrency_support(true);
     let engine = Engine::new(&config)?;
-    let component = Component::from_file(&engine, test_guests::wasi_p3())?;
+    let component = Component::from_file(&engine, guest_build::wasi_p3())?;
     let mut linker = Linker::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker)?;
     wasm_component_middleware_wasi::p3::add_to_linker_with_stream_relay(

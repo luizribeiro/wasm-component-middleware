@@ -12,7 +12,7 @@ use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
-    path: "../../guests/hello/wit",
+    path: "../../support/fixtures/hello/wit",
     world: "hello",
     imports: { default: trappable },
 });
@@ -106,7 +106,7 @@ impl Layer<State> for DenyUserName {
 
 fn invoke(chain: Arc<Chain<State>>, user_name: UserName) -> wasmtime::Result<String> {
     let engine = Engine::default();
-    let component = Component::from_file(&engine, test_guests::hello())?;
+    let component = Component::from_file(&engine, guest_build::hello())?;
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
     example::hello::host::add_to_linker::<_, Routed<State>>(&mut linker, Routed::<State>::get)?;
@@ -131,7 +131,7 @@ fn invoke(chain: Arc<Chain<State>>, user_name: UserName) -> wasmtime::Result<Str
 #[test]
 fn hello_imports_are_routed() {
     let engine = Engine::default();
-    let component = Component::from_file(&engine, test_guests::hello()).unwrap();
+    let component = Component::from_file(&engine, guest_build::hello()).unwrap();
     let mut linker = Linker::<State>::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker).unwrap();
     example::hello::host::add_to_linker::<_, Routed<State>>(&mut linker, Routed::<State>::get)
@@ -143,7 +143,7 @@ fn hello_imports_are_routed() {
 #[test]
 fn unrouted_import_is_named_before_instantiation() {
     let engine = Engine::default();
-    let component = Component::from_file(&engine, test_guests::unrouted_import()).unwrap();
+    let component = Component::from_file(&engine, guest_build::unrouted_import()).unwrap();
     let error = verify_routing(&engine, &component, [HELLO_HOST], ["wasi:"]).unwrap_err();
 
     assert_eq!(
@@ -164,9 +164,9 @@ fn unrouted_import_is_named_before_instantiation() {
 
 #[test]
 fn trace_example_prints_nested_calls_and_greeting() {
-    let output = test_guests::run_example("wasm-component-middleware", "trace").unwrap();
+    let output = guest_build::run_example("wasm-component-middleware", "trace").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "Hello, Ada!\n");
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
@@ -176,9 +176,9 @@ fn trace_example_prints_nested_calls_and_greeting() {
 
 #[test]
 fn deny_example_refuses_one_store_and_allows_the_next() {
-    let output = test_guests::run_example("wasm-component-middleware", "deny").unwrap();
+    let output = guest_build::run_example("wasm-component-middleware", "deny").unwrap();
 
-    test_guests::assert_example_succeeded(&output);
+    guest_build::assert_example_succeeded(&output);
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),

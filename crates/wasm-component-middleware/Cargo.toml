@@ -11,7 +11,7 @@ version.workspace = true
 wasmtime.workspace = true
 
 [dev-dependencies]
-test-guests = { path = "../test-guests" }
+guest-build = { path = "../../support/guest-build" }
 wasmtime = { workspace = true, features = ["cranelift"] }
 wasmtime-wasi.workspace = true
 

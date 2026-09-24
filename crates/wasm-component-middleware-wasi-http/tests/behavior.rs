@@ -24,7 +24,7 @@ use wit_parser::{Resolve, TypeDefKind};
 
 mod p2 {
     wasmtime::component::bindgen!({
-        path: "../../guests/http-p2/wit",
+        path: "../../support/fixtures/http-p2/wit",
         world: "client",
         exports: { default: async },
         require_store_data_send: true,
@@ -33,7 +33,7 @@ mod p2 {
 
 mod p3 {
     wasmtime::component::bindgen!({
-        path: "../../guests/http-p3/wit",
+        path: "../../support/fixtures/http-p3/wit",
         world: "client",
         exports: { default: async | store },
         require_store_data_send: true,
@@ -175,7 +175,7 @@ fn state_with_socket_policy<H: Send>(
 
 async fn fetch_p2(authority: &str, gated: bool) -> (String, Vec<CallRecord>) {
     let engine = engine();
-    let component = Component::from_file(&engine, test_guests::http_p2()).unwrap();
+    let component = Component::from_file(&engine, guest_build::http_p2()).unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let chain = Chain::builder().layer(Record(Arc::clone(&calls))).build();
     let mut linker = Linker::new(&engine);
@@ -201,7 +201,7 @@ async fn fetch_p2(authority: &str, gated: bool) -> (String, Vec<CallRecord>) {
 
 async fn fetch_p3(authority: &str, gated: bool) -> (String, Vec<CallRecord>) {
     let engine = engine();
-    let component = Component::from_file(&engine, test_guests::http_p3()).unwrap();
+    let component = Component::from_file(&engine, guest_build::http_p3()).unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let chain = Chain::builder().layer(Record(Arc::clone(&calls))).build();
     let mut linker = Linker::new(&engine);
@@ -526,7 +526,7 @@ async fn http_hook_denies_before_an_allowed_socket_connection() {
     };
     let hooks = WasiHttpHooks::new(hook_state, DefaultHooks);
     let engine = engine();
-    let component = Component::from_file(&engine, test_guests::http_p2()).unwrap();
+    let component = Component::from_file(&engine, guest_build::http_p2()).unwrap();
     let chain = Chain::builder().build();
     let mut linker = Linker::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker).unwrap();
@@ -558,7 +558,7 @@ async fn allowed_http_bypasses_a_restrictive_socket_policy() {
     };
     let hooks = WasiHttpHooks::new(hook_state, DefaultHooks);
     let engine = engine();
-    let component = Component::from_file(&engine, test_guests::http_p2()).unwrap();
+    let component = Component::from_file(&engine, guest_build::http_p2()).unwrap();
     let chain = Chain::builder().build();
     let mut linker = Linker::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker).unwrap();

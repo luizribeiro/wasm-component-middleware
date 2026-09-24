@@ -136,7 +136,7 @@ fn preview_3_markers_cover_declared_interfaces() {
 #[test]
 fn verification_reports_a_deliberately_unrouted_interface() {
     let engine = Engine::default();
-    let component = Component::from_file(&engine, test_guests::unrouted_import()).unwrap();
+    let component = Component::from_file(&engine, guest_build::unrouted_import()).unwrap();
 
     let error =
         wasm_component_middleware_wasi::verify_routing(&engine, &component, []).unwrap_err();
@@ -257,7 +257,7 @@ fn linker_still_rejects_duplicate_definitions() {
 #[test]
 fn network_error_conversion_requires_the_option_and_reaches_the_chain() {
     let engine = Engine::default();
-    let component = Component::from_file(&engine, test_guests::network_error_code()).unwrap();
+    let component = Component::from_file(&engine, guest_build::network_error_code()).unwrap();
     let mut default_linker = Linker::<State>::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut default_linker).unwrap();
     let chain = Chain::builder().build();

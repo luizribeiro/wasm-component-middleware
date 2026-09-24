@@ -21,7 +21,7 @@ wasmtime-wasi.workspace = true
 wasmtime-wasi-http.workspace = true
 
 [dev-dependencies]
-test-guests = { path = "../test-guests" }
+guest-build = { path = "../../support/guest-build" }
 wasmtime = { workspace = true, features = ["cranelift"] }
 wit-component = { version = "0.258", features = ["dummy-module"] }
 wit-parser = "0.258"

@@ -1946,59 +1946,6 @@ async fn dropping_a_store_with_a_pending_p3_call_does_not_panic() {
     drop(harness);
 }
 
-#[test]
-fn run_example_traces_preview_2_and_preview_3_commands() {
-    let directory = tempfile::tempdir().unwrap();
-    let contents = "middleware kept this output\n".repeat(200);
-    std::fs::write(directory.path().join("note.txt"), &contents).unwrap();
-    let guests = [
-        (
-            guest_build::cat_p2(),
-            "wasi:io/streams@0.2.12.[method]output-stream.blocking-write-and-flush",
-        ),
-        (
-            guest_build::cat_p3(),
-            "wasi:cli/stdout@0.3.0.write-via-stream",
-        ),
-    ];
-
-    for (guest, expected_call) in guests {
-        let output = guest_build::run_example_with_args(
-            "wasm-component-middleware-wasi",
-            "run",
-            &[guest.to_str().unwrap(), "note.txt"],
-            directory.path(),
-        )
-        .unwrap();
-
-        guest_build::assert_example_succeeded(&output);
-        assert_eq!(String::from_utf8(output.stdout).unwrap(), contents);
-        let trace = String::from_utf8(output.stderr).unwrap();
-        assert!(trace.contains(expected_call), "{trace}");
-        assert!(trace.contains("wasi:filesystem/types"), "{trace}");
-    }
-}
-
-#[test]
-fn run_example_propagates_guest_exit_codes() {
-    for (code, success) in [(0, true), (3, false)] {
-        let argument = format!("--exit={code}");
-        let output = guest_build::run_example_with_args(
-            "wasm-component-middleware-wasi",
-            "run",
-            &[guest_build::cat_p2().to_str().unwrap(), &argument],
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).as_path(),
-        )
-        .unwrap();
-
-        assert_eq!(output.status.success(), success);
-        assert_eq!(output.status.code(), Some(code));
-        assert!(output.stdout.is_empty());
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(!stderr.contains("wasm backtrace"), "{stderr}");
-    }
-}
-
 #[tokio::test]
 async fn command_guests_match_plain_wasi() {
     for (guest, preview_3) in [

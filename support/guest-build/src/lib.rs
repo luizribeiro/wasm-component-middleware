@@ -113,7 +113,13 @@ fn workspace_root() -> PathBuf {
 /// Returns a component built from `examples/<name>/guest`.
 #[must_use]
 pub fn example(name: &str) -> PathBuf {
-    let artifact = name.replace('-', "_") + "_guest.wasm";
+    artifact(&format!("{name}-guest"))
+}
+
+/// Returns a component built from a guest package with the given name.
+#[must_use]
+pub fn artifact(package: &str) -> PathBuf {
+    let artifact = package.replace('-', "_") + ".wasm";
     Path::new(env!("GUEST_BUILD_DIR")).join(artifact)
 }
 

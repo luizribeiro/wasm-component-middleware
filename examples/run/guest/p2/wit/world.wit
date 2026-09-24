@@ -1,0 +1,5 @@
+package example:run-p2;
+
+world run-p2 {
+  include wasi:cli/command@0.2.12;
+}

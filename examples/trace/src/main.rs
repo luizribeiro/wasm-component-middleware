@@ -9,7 +9,7 @@ use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
-    path: "../../support/fixtures/hello/wit",
+    path: "guest/wit",
     world: "hello",
     imports: { default: trappable },
 });
@@ -54,7 +54,7 @@ route_imports! {
 
 fn main() -> wasmtime::Result<()> {
     let engine = Engine::default();
-    let component = Component::from_file(&engine, guest_build::hello())?;
+    let component = Component::from_file(&engine, guest_build::example("trace"))?;
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
     example::hello::host::add_to_linker::<_, Routed<State>>(&mut linker, Routed::<State>::get)?;

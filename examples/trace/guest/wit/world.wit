@@ -1,0 +1,11 @@
+package example:hello;
+
+interface host {
+  user-name: func() -> string;
+  log: func(message: string);
+}
+
+world hello {
+  import host;
+  export greet: func(greeting: string) -> string;
+}

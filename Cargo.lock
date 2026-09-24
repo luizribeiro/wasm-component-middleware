@@ -1448,6 +1448,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "trace"
+version = "0.0.0"
+dependencies = [
+ "guest-build",
+ "wasm-component-middleware",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"

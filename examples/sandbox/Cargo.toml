@@ -1,0 +1,19 @@
+[package]
+name = "sandbox"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+guest-build = { path = "../../support/guest-build" }
+tempfile = "3"
+wasm-component-middleware = { path = "../../crates/wasm-component-middleware" }
+wasm-component-middleware-wasi = { path = "../../crates/wasm-component-middleware-wasi" }
+wasmtime = { workspace = true, features = ["cranelift"] }
+wasmtime-wasi.workspace = true
+
+[lints]
+workspace = true

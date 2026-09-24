@@ -1178,6 +1178,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "sandbox"
+version = "0.0.0"
+dependencies = [
+ "guest-build",
+ "tempfile",
+ "wasm-component-middleware",
+ "wasm-component-middleware-wasi",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use wasm_component_middleware::{
     Call, Chain, Denied, InvocationContext, Layer, MiddlewareCtx, MiddlewareView, Outcome,
-    verify_routing,
 };
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
@@ -79,24 +78,16 @@ fn all_p3_imports_component(engine: &Engine) -> Component {
 }
 
 #[test]
-fn only_later_interfaces_are_unrouted() {
+fn all_preview_2_interfaces_are_routed() {
     let engine = Engine::default();
     let component = all_imports_component(&engine);
     let mut linker = Linker::<State>::new(&engine);
     wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker).unwrap();
-    verify_routing(
-        &engine,
-        &component,
-        wasm_component_middleware_wasi::p2::ROUTED_INTERFACES
-            .iter()
-            .copied(),
-        [],
-    )
-    .unwrap();
+    wasm_component_middleware_wasi::verify_routing(&engine, &component, []).unwrap();
 }
 
 #[test]
-fn only_ungated_p3_interfaces_are_unrouted() {
+fn all_preview_3_interfaces_are_routed() {
     let mut config = Config::new();
     config.wasm_component_model_async(true);
     config.concurrency_support(true);
@@ -104,15 +95,34 @@ fn only_ungated_p3_interfaces_are_unrouted() {
     let component = all_p3_imports_component(&engine);
     let mut linker = Linker::<State>::new(&engine);
     wasm_component_middleware_wasi::p3::add_to_linker(&mut linker).unwrap();
-    verify_routing(
-        &engine,
-        &component,
-        wasm_component_middleware_wasi::p3::ROUTED_INTERFACES
+    wasm_component_middleware_wasi::verify_routing(&engine, &component, []).unwrap();
+}
+
+#[test]
+fn verification_reports_a_deliberately_unrouted_interface() {
+    let engine = Engine::default();
+    let component = Component::from_file(&engine, test_guests::unrouted_import()).unwrap();
+
+    let error =
+        wasm_component_middleware_wasi::verify_routing(&engine, &component, []).unwrap_err();
+
+    assert!(
+        error
+            .functions()
             .iter()
-            .copied(),
-        [],
-    )
-    .unwrap();
+            .any(|function| function.starts_with("example:unrouted/host")),
+        "{error}"
+    );
+}
+
+#[test]
+fn asynchronous_preview_2_linker_routes_every_interface() {
+    let engine = Engine::default();
+    let component = all_imports_component(&engine);
+    let mut linker = Linker::<State>::new(&engine);
+
+    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    wasm_component_middleware_wasi::verify_routing(&engine, &component, []).unwrap();
 }
 
 #[test]

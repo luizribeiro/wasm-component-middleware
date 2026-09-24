@@ -34,10 +34,18 @@ impl WasiView for State {
 }
 
 fn all_imports_component(engine: &Engine) -> Component {
+    p2_imports_component(engine, "bindings")
+}
+
+fn proxy_imports_component(engine: &Engine) -> Component {
+    p2_imports_component(engine, "proxy-interfaces")
+}
+
+fn p2_imports_component(engine: &Engine, world: &str) -> Component {
     let mut resolve = Resolve::default();
     let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
     let (package, _) = resolve.push_dir(wit).unwrap();
-    let world = resolve.select_world(&[package], Some("bindings")).unwrap();
+    let world = resolve.select_world(&[package], Some(world)).unwrap();
     let mut module = dummy_module(&resolve, world, ManglingAndAbi::Standard32);
     embed_component_metadata(&mut module, &resolve, world, StringEncoding::UTF8).unwrap();
     let component = ComponentEncoder::default()
@@ -47,6 +55,40 @@ fn all_imports_component(engine: &Engine) -> Component {
         .encode()
         .unwrap();
     Component::new(engine, component).unwrap()
+}
+
+fn async_engine() -> Engine {
+    let mut config = Config::new();
+    config.wasm_component_model_async(true);
+    config.concurrency_support(true);
+    Engine::new(&config).unwrap()
+}
+
+fn instantiate_sync(
+    component: &Component,
+    engine: &Engine,
+    add: impl FnOnce(&mut Linker<State>) -> wasmtime::Result<()>,
+) {
+    let mut linker = Linker::new(engine);
+    add(&mut linker).unwrap();
+    let chain = Chain::builder().build();
+    let mut store = Store::new(engine, state(&chain));
+    linker.instantiate(&mut store, component).unwrap();
+}
+
+async fn instantiate_async(
+    component: &Component,
+    engine: &Engine,
+    add: impl FnOnce(&mut Linker<State>) -> wasmtime::Result<()>,
+) {
+    let mut linker = Linker::new(engine);
+    add(&mut linker).unwrap();
+    let chain = Chain::builder().build();
+    let mut store = Store::new(engine, state(&chain));
+    linker
+        .instantiate_async(&mut store, component)
+        .await
+        .unwrap();
 }
 
 fn all_p3_imports_component(engine: &Engine) -> Component {
@@ -78,23 +120,16 @@ fn all_p3_imports_component(engine: &Engine) -> Component {
 }
 
 #[test]
-fn all_preview_2_interfaces_are_routed() {
+fn preview_2_markers_cover_declared_interfaces() {
     let engine = Engine::default();
     let component = all_imports_component(&engine);
-    let mut linker = Linker::<State>::new(&engine);
-    wasm_component_middleware_wasi::p2::add_to_linker_sync(&mut linker).unwrap();
     wasm_component_middleware_wasi::verify_routing(&engine, &component, []).unwrap();
 }
 
 #[test]
-fn all_preview_3_interfaces_are_routed() {
-    let mut config = Config::new();
-    config.wasm_component_model_async(true);
-    config.concurrency_support(true);
-    let engine = Engine::new(&config).unwrap();
+fn preview_3_markers_cover_declared_interfaces() {
+    let engine = async_engine();
     let component = all_p3_imports_component(&engine);
-    let mut linker = Linker::<State>::new(&engine);
-    wasm_component_middleware_wasi::p3::add_to_linker(&mut linker).unwrap();
     wasm_component_middleware_wasi::verify_routing(&engine, &component, []).unwrap();
 }
 
@@ -116,13 +151,96 @@ fn verification_reports_a_deliberately_unrouted_interface() {
 }
 
 #[test]
-fn asynchronous_preview_2_linker_routes_every_interface() {
+fn sync_preview_2_linker_defines_every_import() {
     let engine = Engine::default();
     let component = all_imports_component(&engine);
-    let mut linker = Linker::<State>::new(&engine);
+    instantiate_sync(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p2::add_to_linker_sync(linker)
+    });
+}
 
-    wasm_component_middleware_wasi::p2::add_to_linker_async(&mut linker).unwrap();
-    wasm_component_middleware_wasi::verify_routing(&engine, &component, []).unwrap();
+#[test]
+fn sync_preview_2_options_linker_defines_every_import() {
+    let engine = Engine::default();
+    let component = all_imports_component(&engine);
+    let options = wasmtime_wasi::p2::bindings::sync::LinkOptions::default();
+    instantiate_sync(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p2::add_to_linker_with_options_sync(linker, &options)
+    });
+}
+
+#[test]
+fn sync_preview_2_proxy_linker_defines_every_import() {
+    let engine = Engine::default();
+    let component = proxy_imports_component(&engine);
+    instantiate_sync(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p2::add_to_linker_proxy_interfaces_sync(linker)
+    });
+}
+
+#[tokio::test]
+async fn async_preview_2_linker_defines_every_import() {
+    let engine = async_engine();
+    let component = all_imports_component(&engine);
+    instantiate_async(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p2::add_to_linker_async(linker)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn async_preview_2_options_linker_defines_every_import() {
+    let engine = async_engine();
+    let component = all_imports_component(&engine);
+    let options = wasmtime_wasi::p2::bindings::LinkOptions::default();
+    instantiate_async(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p2::add_to_linker_with_options_async(linker, &options)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn async_preview_2_proxy_linker_defines_every_import() {
+    let engine = async_engine();
+    let component = proxy_imports_component(&engine);
+    instantiate_async(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p2::add_to_linker_proxy_interfaces_async(linker)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn preview_3_linker_defines_every_import() {
+    let engine = async_engine();
+    let component = all_p3_imports_component(&engine);
+    instantiate_async(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p3::add_to_linker(linker)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn preview_3_options_linker_defines_every_import() {
+    let engine = async_engine();
+    let component = all_p3_imports_component(&engine);
+    let options = wasmtime_wasi::p3::bindings::LinkOptions::default();
+    instantiate_async(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p3::add_to_linker_with_options(linker, &options)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn preview_3_stream_relay_linker_defines_every_import() {
+    let engine = async_engine();
+    let component = all_p3_imports_component(&engine);
+    instantiate_async(&component, &engine, |linker| {
+        wasm_component_middleware_wasi::p3::add_to_linker_with_stream_relay(
+            linker,
+            wasm_component_middleware_wasi::p3::StreamRelay::default(),
+        )
+    })
+    .await;
 }
 
 #[test]

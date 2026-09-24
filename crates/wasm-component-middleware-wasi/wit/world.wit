@@ -5,6 +5,18 @@ world bindings {
   include wasi:cli/imports@0.2.12;
 }
 
+world proxy-interfaces {
+  import wasi:cli/stdin@0.2.12;
+  import wasi:cli/stdout@0.2.12;
+  import wasi:cli/stderr@0.2.12;
+  import wasi:clocks/monotonic-clock@0.2.12;
+  import wasi:clocks/wall-clock@0.2.12;
+  import wasi:io/error@0.2.12;
+  import wasi:io/poll@0.2.12;
+  import wasi:io/streams@0.2.12;
+  import wasi:random/random@0.2.12;
+}
+
 world network-error-code-probe {
   import wasi:cli/stdout@0.2.12;
   import wasi:io/streams@0.2.12;
